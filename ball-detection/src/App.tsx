@@ -10,15 +10,14 @@ import { MediaUploadStudio } from "./components/MediaUploadStudio";
 import { PerformanceDashboard } from "./components/PerformanceDashboard";
 import { AboutArchitecture } from "./components/AboutArchitecture";
 import { AiAnalysisModal } from "./components/AiAnalysisModal";
-import { ActiveTab, BallDetection, DetectionMode, FaceDetection, PipelineConfig } from "./types";
+import { ActiveTab, BallDetection, DetectionMode, PipelineConfig } from "./types";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("camera");
-  const [detectionMode, setDetectionMode] = useState<DetectionMode>("combined");
 
   // Global Pipeline Configuration State
   const [config, setConfig] = useState<PipelineConfig>({
-    mode: "combined",
+    mode: "ball",
     f1Tuning: {
       confidenceThreshold: 0.45,
       nmsIouThreshold: 0.45,
@@ -44,30 +43,20 @@ export default function App() {
     },
     showHUDOverlays: true,
     showTrajectoryTrails: true,
-    showLandmarkMesh: true,
     showCrosshairs: true,
   });
-
-  // Sync mode changes with global config
-  const handleSetDetectionMode = (mode: DetectionMode) => {
-    setDetectionMode(mode);
-    setConfig((prev) => ({ ...prev, mode }));
-  };
 
   // AI Modal State
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [capturedFrame, setCapturedFrame] = useState<string | null>(null);
   const [capturedBalls, setCapturedBalls] = useState<BallDetection[]>([]);
-  const [capturedFaces, setCapturedFaces] = useState<FaceDetection[]>([]);
 
   const handleTriggerAiAnalysis = (
     frameBase64: string,
-    balls: BallDetection[],
-    faces: FaceDetection[]
+    balls: BallDetection[]
   ) => {
     setCapturedFrame(frameBase64);
     setCapturedBalls(balls);
-    setCapturedFaces(faces);
     setAiModalOpen(true);
   };
 
@@ -78,8 +67,6 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        detectionMode={detectionMode}
-        setDetectionMode={handleSetDetectionMode}
         liveFps={35.8}
       />
 
@@ -115,7 +102,7 @@ export default function App() {
               Trigger instant server-side AI Vision analysis directly from the Live Camera Studio or Media Upload Studio using the "AI Telemetry Analysis" button.
             </p>
             <button
-              onClick={() => handleTriggerAiAnalysis("", [], [])}
+              onClick={() => handleTriggerAiAnalysis("", [])}
               className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all inline-flex items-center gap-2"
             >
               Open Gemini AI Assistant
@@ -133,13 +120,12 @@ export default function App() {
         onClose={() => setAiModalOpen(false)}
         frameBase64={capturedFrame}
         balls={capturedBalls}
-        faces={capturedFaces}
         config={config}
       />
 
       {/* Footer */}
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500 font-mono">
-        <p>BallVision & Face AI Telemetry System • Powered by OpenCV, Vite, React, & Gemini 3.6 Flash</p>
+        <p>BallVision AI Telemetry System • Powered by OpenCV, Vite, React, & Gemini 3.6 Flash</p>
       </footer>
 
     </div>

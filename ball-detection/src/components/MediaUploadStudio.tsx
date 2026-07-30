@@ -1,11 +1,11 @@
 import React, { useState, useRef } from "react";
-import { Upload, Image as ImageIcon, Video, Sparkles, Check, Play, Pause, Layers, CircleDot } from "lucide-react";
-import { BallDetection, FaceDetection, PipelineConfig } from "../types";
+import { Upload, Sparkles } from "lucide-react";
+import { BallDetection, PipelineConfig } from "../types";
 import { combinedTelemetryEngine } from "../engine/combinedTelemetryEngine";
 
 interface MediaUploadStudioProps {
   config: PipelineConfig;
-  onTriggerAiAnalysis: (frameBase64: string, balls: BallDetection[], faces: FaceDetection[]) => void;
+  onTriggerAiAnalysis: (frameBase64: string, balls: BallDetection[]) => void;
 }
 
 export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
@@ -18,14 +18,11 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [detectedBalls, setDetectedBalls] = useState<BallDetection[]>([]);
-  const [detectedFaces, setDetectedFaces] = useState<FaceDetection[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -38,10 +35,8 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
     if (file.type.startsWith("video/")) {
       setMediaType("video");
       setDetectedBalls([]);
-      setDetectedFaces([]);
     } else {
       setMediaType("image");
-      // Process image once loaded
       setTimeout(() => processStaticImage(url), 100);
     }
   };
@@ -66,9 +61,8 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
         if (ctx) {
           ctx.drawImage(img, 0, 0, img.width, img.height);
 
-          const { balls, faces } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
+          const { balls } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
           setDetectedBalls(balls);
-          setDetectedFaces(faces);
         }
       }
       setIsProcessing(false);
@@ -89,21 +83,8 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const { balls, faces } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
+        const { balls } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
         setDetectedBalls(balls);
-        setDetectedFaces(faces);
-      }
-    }
-  };
-
-  const toggleVideoPlay = () => {
-    if (videoRef.current) {
-      if (isVideoPlaying) {
-        videoRef.current.pause();
-        setIsVideoPlaying(false);
-      } else {
-        videoRef.current.play();
-        setIsVideoPlaying(true);
       }
     }
   };
@@ -111,7 +92,7 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
   const handleRunAiAnalysis = () => {
     if (canvasRef.current) {
       const frameBase64 = canvasRef.current.toDataURL("image/jpeg", 0.9);
-      onTriggerAiAnalysis(frameBase64, detectedBalls, detectedFaces);
+      onTriggerAiAnalysis(frameBase64, detectedBalls);
     }
   };
 
@@ -216,20 +197,11 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
                 Detected Objects Summary
               </span>
 
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 text-[10px] block">Balls Found</span>
-                  <span className="text-emerald-400 text-base font-bold">
-                    {detectedBalls.length}
-                  </span>
-                </div>
-
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 text-[10px] block">Faces Found</span>
-                  <span className="text-cyan-400 text-base font-bold">
-                    {detectedFaces.length}
-                  </span>
-                </div>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs font-mono">
+                <span className="text-slate-400 text-[10px] block">Balls Found</span>
+                <span className="text-emerald-400 text-base font-bold">
+                  {detectedBalls.length}
+                </span>
               </div>
 
               {/* Bounding Box Coordinate Table */}
@@ -257,24 +229,9 @@ export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
                     </div>
                   ))}
 
-                  {detectedFaces.map((f) => (
-                    <div
-                      key={`f-${f.id}`}
-                      className="p-2.5 bg-slate-950 border border-cyan-500/30 rounded-lg space-y-1"
-                    >
-                      <div className="flex justify-between text-cyan-400 font-bold">
-                        <span>Face #{f.id} ({f.emotion})</span>
-                        <span>{(f.confidence * 100).toFixed(1)}%</span>
-                      </div>
-                      <div className="text-slate-400">
-                        Box: [{f.bbox.join(", ")}]
-                      </div>
-                    </div>
-                  ))}
-
-                  {detectedBalls.length === 0 && detectedFaces.length === 0 && (
+                  {detectedBalls.length === 0 && (
                     <div className="p-4 bg-slate-950 text-slate-500 text-center rounded-lg">
-                      No ball or face targets detected on current frame
+                      No ball targets detected on current frame
                     </div>
                   )}
                 </div>

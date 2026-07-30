@@ -1,4 +1,4 @@
-export type DetectionMode = "ball" | "face" | "combined";
+export type DetectionMode = "ball";
 
 export type ActiveTab = "camera" | "upload" | "dashboard" | "ai_assistant" | "about";
 
@@ -26,34 +26,9 @@ export interface BallDetection {
   speedPxPerSec?: number;
 }
 
-export interface FaceLandmark {
-  x: number;
-  y: number;
-  name?: string;
-}
-
-export interface FaceDetection {
-  id: number;
-  bbox: [number, number, number, number];
-  confidence: number;
-  center: [number, number];
-  landmarks: FaceLandmark[]; // Key landmarks (eyes, nose, mouth corners, jaw)
-  pose: {
-    pitch: number; // degrees
-    yaw: number;   // degrees
-    roll: number;  // degrees
-  };
-  gazeVector: [number, number]; // [gx, gy] normalized direction
-  emotion: "Focused" | "Neutral" | "Excited" | "Surprised" | "Tracking";
-  ageBracket: string;
-}
-
 export interface SpatialTelemetry {
-  ballToFaceDistancePx: number | null;
-  spatialAlignmentPercentage: number | null;
   relativeVelocityPxSec: number;
   trajectoryCurvature: "Linear" | "Parabolic" | "Unstable" | "Stationary";
-  attentionFocusAngleDeg: number | null;
 }
 
 export interface ColorFilterSettings {
@@ -89,7 +64,6 @@ export interface PipelineConfig {
   colorFilter: ColorFilterSettings;
   showHUDOverlays: boolean;
   showTrajectoryTrails: boolean;
-  showLandmarkMesh: boolean;
   showCrosshairs: boolean;
 }
 
@@ -100,7 +74,6 @@ export interface PerformanceMetrics {
   processingTimeMs: number;
   avgConfidence: number;
   detectedBallCount: number;
-  detectedFaceCount: number;
   precision: number;
   recall: number;
   f1Score: number;
@@ -115,9 +88,7 @@ export interface TelemetryLogEntry {
   timestamp: string;
   mode: DetectionMode;
   ballCount: number;
-  faceCount: number;
   ballTypes: string[];
-  distancePx: number | null;
   fps: number;
   processingMs: number;
 }

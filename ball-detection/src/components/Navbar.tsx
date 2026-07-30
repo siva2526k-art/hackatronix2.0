@@ -6,24 +6,18 @@ import {
   BarChart2,
   Sparkles,
   Info,
-  Layers,
-  Activity,
 } from "lucide-react";
-import { ActiveTab, DetectionMode } from "../types";
+import { ActiveTab } from "../types";
 
 interface NavbarProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
-  detectionMode: DetectionMode;
-  setDetectionMode: (mode: DetectionMode) => void;
   liveFps: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
-  detectionMode,
-  setDetectionMode,
   liveFps,
 }) => {
   return (
@@ -38,55 +32,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="font-extrabold text-lg tracking-tight text-white">
-                BallVision & Face <span className="text-emerald-400 font-mono">AI</span>
+                BallVision <span className="text-emerald-400 font-mono">AI</span>
               </span>
               <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full">
                 v2.5
               </span>
             </div>
             <p className="text-xs text-slate-400 hidden sm:block">
-              Monocular 2D Telemetry & OpenCV Pipeline
+              Multi-Camera Real-Time Ball Detection & Telemetry Subsystem
             </p>
           </div>
-        </div>
-
-        {/* Mode Selector Switcher */}
-        <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
-          <button
-            onClick={() => setDetectionMode("ball")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
-              detectionMode === "ball"
-                ? "bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/20"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <CircleDot className="w-3.5 h-3.5" />
-            Ball Detection
-          </button>
-          
-          <button
-            onClick={() => setDetectionMode("face")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
-              detectionMode === "face"
-                ? "bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            Face Detection
-          </button>
-
-          <button
-            onClick={() => setDetectionMode("combined")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
-              detectionMode === "combined"
-                ? "bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold shadow-md shadow-emerald-500/20"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            Combined Dual Mode
-          </button>
         </div>
 
         {/* Primary Navigation Tabs */}

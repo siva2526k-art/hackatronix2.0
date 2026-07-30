@@ -37,28 +37,22 @@ export default async function handler(req: any, res: any) {
     });
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const { image, detections, faceDetections, mode, promptCustom } = body;
+    const { image, detections, promptCustom } = body;
 
     const ballInfo = detections && detections.length > 0
-      ? detections.map((d: any) => `${d.class_name || 'Ball'} (${(d.confidence * 100).toFixed(1)}% conf at [${d.bbox.join(', ')}])`).join("; ")
+      ? detections.map((d: any) => `${d.className || d.class_name || 'Ball'} (${(d.confidence * 100).toFixed(1)}% conf at [${d.bbox.join(', ')}])`).join("; ")
       : "No balls detected";
 
-    const faceInfo = faceDetections && faceDetections.length > 0
-      ? faceDetections.map((f: any) => `Face (${(f.confidence * 100).toFixed(1)}% conf, Pitch: ${f.pose?.pitch || 0}°, Emotion: ${f.emotion || 'Neutral'})`).join("; ")
-      : "No faces detected";
-
     const systemPrompt = `You are a Principal Computer Vision, Biomechanics, and Sports Analytics Specialist.
-Analyze the provided telemetry frame data for Ball & Face Tracking.
+Analyze the provided telemetry frame data for Ball Tracking & Velocity Analysis.
 
 Context Data:
-- Operating Mode: ${mode || "Combined Telemetry"}
 - Ball Detection Telemetry: ${ballInfo}
-- Face & Pose Telemetry: ${faceInfo}
 ${promptCustom ? `- User Specific Question: ${promptCustom}` : ""}
 
 Provide a concise, high-value technical & tactical breakdown formatted in clean markdown:
-1. **Object Classification & Visual Geometry**: Identify specific ball/face dynamics, specular highlight patterns, and spatial alignments.
-2. **Kinematics & Spatial Telemetry**: Estimate trajectory, velocity vectors, head-pose alignment, or eye-gaze targeting relative to the ball.
+1. **Object Classification & Visual Geometry**: Identify specific ball dynamics, specular highlight patterns, and spatial alignments.
+2. **Kinematics & Spatial Telemetry**: Estimate trajectory, velocity vectors, and motion curves.
 3. **Pipeline Optimization & Environment Tuning**: Recommendations for camera frame rate, lighting conditions, specular thresholding, or color filter tuning for maximum F1 accuracy.`;
 
     const contentsParts: any[] = [{ text: systemPrompt }];

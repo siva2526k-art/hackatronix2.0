@@ -1,5 +1,5 @@
 import React from "react";
-import { Info, Cpu, Layers, ShieldCheck, Palette, Sparkles, Code2, CheckCircle } from "lucide-react";
+import { Info, Cpu, Layers, ShieldCheck, Palette, Sparkles, CheckCircle } from "lucide-react";
 
 export const AboutArchitecture: React.FC = () => {
   return (
@@ -16,13 +16,13 @@ export const AboutArchitecture: React.FC = () => {
               System Architecture & Pipeline Physics
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Unified 2D Ball & Face Telemetry System built with OpenCV, Canvas Computer Vision, and Gemini AI
+              Multi-Camera 2D Ball Telemetry System built with OpenCV, Canvas Computer Vision, and Gemini AI
             </p>
           </div>
         </div>
 
         <p className="text-xs text-slate-300 leading-relaxed">
-          BallVision & Face AI is a monocular 2D real-time computer vision platform designed for high-FPS, high-F1 tracking under varying lighting conditions. It integrates a multi-stage filtering architecture to eliminate false positives and bounding box jitter during high-velocity movement.
+          BallVision AI is a real-time computer vision platform designed for high-FPS, high-F1 tracking under varying lighting conditions. It integrates a multi-stage filtering architecture to eliminate false positives and bounding box jitter during high-velocity ball movement.
         </p>
       </div>
 
@@ -32,7 +32,7 @@ export const AboutArchitecture: React.FC = () => {
         {/* Stage 1 */}
         <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3">
           <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1.5">
-            <Layers className="w-4 h-4" /> Stage 1: Candidate Generation & YOLO Scanning
+            <Layers className="w-4 h-4" /> Stage 1: Candidate Generation & Scanning
           </span>
           <p className="text-xs text-slate-300 leading-relaxed">
             Extracts regional color blobs and structural gradient boundaries across the image canvas. Candidate bounding boxes undergo Non-Maximum Suppression (NMS) to eliminate duplicate overlapping boxes.
@@ -65,7 +65,7 @@ export const AboutArchitecture: React.FC = () => {
             <Sparkles className="w-4 h-4" /> Stage 4: Vercel Serverless Gemini Proxy
           </span>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Calls Gemini 3.6 Flash via serverless function proxy (<code className="text-cyan-400">/api/gemini.ts</code>) to keep GEMINI_API_KEY secure while delivering sports kinematics and facial biomechanics analysis.
+            Calls Gemini 3.6 Flash via serverless function proxy (<code className="text-cyan-400">/api/gemini.ts</code>) to keep GEMINI_API_KEY secure while delivering sports kinematics telemetry analysis.
           </p>
         </div>
 
@@ -84,15 +84,11 @@ export const AboutArchitecture: React.FC = () => {
           </li>
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-            68-point facial landmark mesh & pose estimation (Pitch, Yaw, Roll, Gaze vector).
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            Live spatial correlation vectors linking player position to ball trajectory in real-time.
+            Multi-camera independent stream tracking with per-tile state isolation.
           </li>
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            100% client-side fallback ensure canvas tracking continues even without network connection.
+            100% client-side fallback ensures canvas tracking continues even without network connection.
           </li>
         </ul>
       </div>

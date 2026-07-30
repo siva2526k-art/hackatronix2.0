@@ -29,7 +29,7 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
 
   const exportTelemetryJson = () => {
     const data = {
-      system: "BallVision & Face Telemetry AI",
+      system: "BallVision AI Telemetry System",
       timestamp: new Date().toISOString(),
       pipelineConfig: config,
       metrics: {

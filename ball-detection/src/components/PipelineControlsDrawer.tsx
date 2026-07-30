@@ -438,18 +438,6 @@ export const PipelineControlsDrawer: React.FC<PipelineControlsDrawerProps> = ({
                 />
                 Motion Trails
               </label>
-
-              <label className="flex items-center gap-1.5 cursor-pointer text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={config.showLandmarkMesh}
-                  onChange={(e) =>
-                    onChangeConfig({ ...config, showLandmarkMesh: e.target.checked })
-                  }
-                  className="accent-cyan-400 w-4 h-4"
-                />
-                Face Mesh
-              </label>
             </div>
           </div>
 

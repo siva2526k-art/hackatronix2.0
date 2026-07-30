@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Sparkles, Send, X, Bot, AlertCircle, RefreshCw } from "lucide-react";
-import { BallDetection, FaceDetection, PipelineConfig } from "../types";
+import { Sparkles, Send, X, AlertCircle, RefreshCw } from "lucide-react";
+import { BallDetection, PipelineConfig } from "../types";
 
 interface AiAnalysisModalProps {
   isOpen: boolean;
   onClose: () => void;
   frameBase64: string | null;
   balls: BallDetection[];
-  faces: FaceDetection[];
   config: PipelineConfig;
 }
 
@@ -16,7 +15,6 @@ export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
   onClose,
   frameBase64,
   balls,
-  faces,
   config,
 }) => {
   const [customPrompt, setCustomPrompt] = useState("");
@@ -36,7 +34,6 @@ export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
         body: JSON.stringify({
           image: frameBase64,
           detections: balls,
-          faceDetections: faces,
           mode: config.mode,
           promptCustom: customPrompt,
         }),
@@ -127,9 +124,6 @@ export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
                 <span className="text-emerald-400 block">
                   Balls: {balls.length > 0 ? balls.map((b) => b.className).join(", ") : "None"}
                 </span>
-                <span className="text-cyan-400 block">
-                  Faces: {faces.length} detected
-                </span>
               </div>
             </div>
           )}
@@ -138,9 +132,9 @@ export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
           {isLoading && (
             <div className="py-12 text-center space-y-3">
               <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto" />
-              <p className="text-slate-300 font-bold">Analyzing Ball & Face Kinematics...</p>
+              <p className="text-slate-300 font-bold">Analyzing Ball Kinematics...</p>
               <p className="text-slate-500 text-[11px]">
-                Computing trajectory vectors, specular glint features, and pose alignment
+                Computing trajectory vectors and specular glint features
               </p>
             </div>
           )}
