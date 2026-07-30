@@ -1,721 +1,686 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Plus,
   X,
-  Play,
-  Square,
   Sparkles,
-  Activity,
-  Zap,
-  CheckCircle2,
-  AlertTriangle,
   Layers,
-  RotateCcw,
-} from "lucide-react";
-import {
-  BallDetection,
-  PipelineConfig,
-} from "../types";
-import { BallDetectorPipeline } from "../engine/ballDetectorPipeline";
-import { PipelineControlsDrawer } from "./PipelineControlsDrawer";
+  Activity,
+  AlertCircle,
+  Eye,
+  RefreshCw,
+  VideoOff,
+} from 'lucide-react';
+import { BallDetectorPipeline } from '../engine/ballDetectorPipeline';
+import { CameraStreamTileState, PipelineConfig, DetectedBall } from '../types';
 
 interface LiveCameraStudioProps {
-  config: PipelineConfig;
-  setConfig: React.Dispatch<React.SetStateAction<PipelineConfig>>;
-  onTriggerAiAnalysis: (frameBase64: string, balls: BallDetection[]) => void;
+  pipelineConfig: PipelineConfig;
+  onTriggerAiSnapshot: (base64Frame: string, detectedBalls: DetectedBall[], cameraLabel: string) => void;
+  onUpdateCameraStates: (states: CameraStreamTileState[]) => void;
 }
 
-interface CameraDevice {
-  deviceId: string;
-  label: string;
-}
-
-interface CameraTileState {
-  id: string; // Unique tile instance ID
+interface ActiveCameraInstance {
+  id: string;
   deviceId: string;
   label: string;
   stream: MediaStream | null;
+  pipeline: BallDetectorPipeline;
   isActive: boolean;
-  isDemoMode: boolean; // Explicit toggle for synthetic testing
-  error: string | null;
-  fps: number;
-  latencyMs: number;
-  detections: BallDetection[];
-  pipeline: BallDetectorPipeline; // Independent pipeline instance per tile
+  error?: string;
+  showTrails: boolean;
+  showBoundingBox: boolean;
+  showCandidates: boolean;
 }
 
-const LOCAL_STORAGE_KEY = "ballvision_active_cameras_v3";
+interface TileMetrics {
+  fps: number;
+  latencyMs: number;
+  detectedBalls: DetectedBall[];
+}
 
 export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
-  config,
-  setConfig,
-  onTriggerAiAnalysis,
+  pipelineConfig,
+  onTriggerAiSnapshot,
+  onUpdateCameraStates,
 }) => {
-  const [availableDevices, setAvailableDevices] = useState<CameraDevice[]>([]);
-  const [tiles, setTiles] = useState<CameraTileState[]>([]);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [selectedDeviceToAdd, setSelectedDeviceToAdd] = useState<string>("");
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [cameraInstances, setCameraInstances] = useState<ActiveCameraInstance[]>([]);
+  const [selectedDeviceToAdd, setSelectedDeviceToAdd] = useState<string>('');
+  const [isRefreshingDevices, setIsRefreshingDevices] = useState<boolean>(false);
+  const [tileMetricsMap, setTileMetricsMap] = useState<Map<string, TileMetrics>>(new Map());
 
-  // Refs for tracking DOM elements per tile ID
+  // References to video and canvas elements for each camera tile ID
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const hiddenCanvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
-  const overlayCanvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
-  const animFrameIds = useRef<Map<string, number>>(new Map());
+  const canvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const animationFrameIds = useRef<Map<string, number>>(new Map());
+  const tileMetricsRef = useRef<Map<string, TileMetrics>>(new Map());
+  const cameraInstancesRef = useRef<ActiveCameraInstance[]>([]);
 
-  // 1. Enumerate available camera devices
+  // Sync ref to current instances for unmount cleanup
   useEffect(() => {
-    async function enumerateCameras() {
+    cameraInstancesRef.current = cameraInstances;
+  }, [cameraInstances]);
+
+  // Periodic metrics sync to parent and local display (300ms throttle)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTileMetricsMap(new Map(tileMetricsRef.current));
+
+      const tileStates: CameraStreamTileState[] = cameraInstances.map((inst) => {
+        const metrics = tileMetricsRef.current.get(inst.id) || { fps: 0, latencyMs: 0, detectedBalls: [] };
+        return {
+          cameraId: inst.id,
+          label: inst.label,
+          isActive: inst.isActive,
+          fps: metrics.fps,
+          latencyMs: metrics.latencyMs,
+          detectedBalls: metrics.detectedBalls,
+        };
+      });
+
+      onUpdateCameraStates(tileStates);
+    }, 300);
+
+    return () => clearInterval(interval);
+  }, [cameraInstances, onUpdateCameraStates]);
+
+  // 1. Enumerate connected video input devices
+  const enumerateCameras = async () => {
+    setIsRefreshingDevices(true);
+    try {
+      // Request initial permission if needed to get full device labels
       try {
-        // Request temporary stream to trigger permission prompt & populate camera labels
-        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }).catch(() => null);
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (tempStream) tempStream.getTracks().forEach((t) => t.stop());
-
-        const videoInputs = devices
-          .filter((d) => d.kind === "videoinput")
-          .map((d, idx) => ({
-            deviceId: d.deviceId,
-            label: d.label || `Camera ${idx + 1}`,
-          }));
-
-        setAvailableDevices(videoInputs);
-
-        // Load saved camera device IDs from LocalStorage or default to first camera
-        const savedIdsJson = localStorage.getItem(LOCAL_STORAGE_KEY);
-        let initialDeviceIds: string[] = [];
-
-        if (savedIdsJson) {
-          try {
-            initialDeviceIds = JSON.parse(savedIdsJson);
-          } catch (e) {
-            initialDeviceIds = [];
-          }
-        }
-
-        if (initialDeviceIds.length === 0 && videoInputs.length > 0) {
-          initialDeviceIds = [videoInputs[0].deviceId];
-        }
-
-        // Initialize tile state for initial devices
-        if (initialDeviceIds.length > 0) {
-          const initialTiles: CameraTileState[] = initialDeviceIds.map((devId, idx) => {
-            const match = videoInputs.find((v) => v.deviceId === devId);
-            return {
-              id: `tile-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 4)}`,
-              deviceId: devId,
-              label: match ? match.label : `Camera ${idx + 1}`,
-              stream: null,
-              isActive: false,
-              isDemoMode: false,
-              error: null,
-              fps: 0,
-              latencyMs: 0,
-              detections: [],
-              pipeline: new BallDetectorPipeline(),
-            };
-          });
-          setTiles(initialTiles);
-        }
-      } catch (err) {
-        console.error("Camera enumeration error:", err);
+        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        tempStream.getTracks().forEach((track) => track.stop());
+      } catch (e) {
+        // User may deny or ignore camera permission on initial query
       }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+      setAvailableDevices(videoDevices);
+
+      if (videoDevices.length > 0 && !selectedDeviceToAdd) {
+        setSelectedDeviceToAdd(videoDevices[0].deviceId);
+      }
+    } catch (err) {
+      console.error('Failed to enumerate video devices:', err);
+    } finally {
+      setIsRefreshingDevices(false);
+    }
+  };
+
+  useEffect(() => {
+    enumerateCameras();
+
+    // Load persisted camera IDs from localStorage
+    const savedCameraDeviceIds = localStorage.getItem('ballvision_active_cameras');
+    if (savedCameraDeviceIds) {
+      try {
+        const deviceIds: string[] = JSON.parse(savedCameraDeviceIds);
+        deviceIds.forEach((id) => addCameraTile(id));
+      } catch (e) {
+        // Fallback default
+      }
+    } else {
+      // Default to 1 camera on load if available
+      addCameraTile('');
     }
 
-    enumerateCameras();
+    return () => {
+      // Clean up all stream tracks on component unmount
+      cameraInstancesRef.current.forEach((inst) => {
+        if (inst.stream) {
+          inst.stream.getTracks().forEach((track) => track.stop());
+        }
+      });
+      animationFrameIds.current.forEach((id) => cancelAnimationFrame(id));
+    };
   }, []);
 
-  // Save active tile device IDs to localStorage
+  // Update pipeline config across all active pipelines when global settings change
   useEffect(() => {
-    if (tiles.length > 0) {
-      const ids = tiles.map((t) => t.deviceId);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(ids));
-    }
-  }, [tiles]);
+    cameraInstances.forEach((inst) => {
+      inst.pipeline.updateConfig(pipelineConfig);
+    });
+  }, [pipelineConfig]);
 
-  // Start real webcam stream for a specific tile
-  const startTileStream = async (tileId: string, deviceId: string) => {
+  // Persist active device IDs to localStorage
+  useEffect(() => {
+    const activeDeviceIds = cameraInstances.map((inst) => inst.deviceId);
+    localStorage.setItem('ballvision_active_cameras', JSON.stringify(activeDeviceIds));
+  }, [cameraInstances]);
+
+  // 2. Add Camera Tile
+  const addCameraTile = async (targetDeviceId?: string) => {
+    const tileId = `cam_tile_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const pipeline = new BallDetectorPipeline(tileId, pipelineConfig);
+
+    let label = `Camera Feed ${cameraInstances.length + 1}`;
+    let stream: MediaStream | null = null;
+    let error: string | undefined = undefined;
+
+    const deviceToUse = targetDeviceId || selectedDeviceToAdd;
+
     try {
       const constraints: MediaStreamConstraints = {
-        video: deviceId
-          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } }
-          : { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
+        video: deviceToUse
+          ? { deviceId: { exact: deviceToUse }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        label = track.label || label;
+      }
+    } catch (err: any) {
+      console.warn(`Camera device access failed for ${deviceToUse}:`, err);
+      error = 'Failed to access camera stream. Check device permissions or unplugged cable.';
+    }
 
-      // Attach stream to video element
-      const videoEl = videoRefs.current.get(tileId);
-      if (videoEl) {
-        videoEl.srcObject = stream;
+    const newInstance: ActiveCameraInstance = {
+      id: tileId,
+      deviceId: deviceToUse,
+      label,
+      stream,
+      pipeline,
+      isActive: stream !== null && stream.active,
+      error,
+      showTrails: true,
+      showBoundingBox: true,
+      showCandidates: false,
+    };
+
+    setCameraInstances((prev) => [...prev, newInstance]);
+  };
+
+  // 3. Remove Camera Tile & Stop Stream Tracks
+  const removeCameraTile = (id: string) => {
+    // Cancel animation frame loop
+    const frameId = animationFrameIds.current.get(id);
+    if (frameId) {
+      cancelAnimationFrame(frameId);
+      animationFrameIds.current.delete(id);
+    }
+
+    tileMetricsRef.current.delete(id);
+
+    setCameraInstances((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target && target.stream) {
+        target.stream.getTracks().forEach((track) => track.stop());
+      }
+      return prev.filter((item) => item.id !== id);
+    });
+
+    videoRefs.current.delete(id);
+    canvasRefs.current.delete(id);
+  };
+
+  // 4. Processing Loop for each Camera Tile
+  useEffect(() => {
+    cameraInstances.forEach((instance) => {
+      if (!instance.stream || !instance.isActive) return;
+
+      const videoEl = videoRefs.current.get(instance.id);
+      const canvasEl = canvasRefs.current.get(instance.id);
+
+      if (!videoEl || !canvasEl) return;
+
+      if (videoEl.srcObject !== instance.stream) {
+        videoEl.srcObject = instance.stream;
         videoEl.play().catch(() => {});
       }
 
-      setTiles((prev) =>
-        prev.map((t) =>
-          t.id === tileId
-            ? { ...t, stream, isActive: true, isDemoMode: false, error: null, detections: [] }
-            : t
-        )
-      );
-    } catch (err: any) {
-      console.warn(`Failed to start camera stream for ${tileId}:`, err);
-      setTiles((prev) =>
-        prev.map((t) =>
-          t.id === tileId
-            ? {
-                ...t,
-                error: "Camera access denied or device in use.",
-                isActive: false,
-                isDemoMode: false,
-                detections: [],
-              }
-            : t
-        )
-      );
-    }
-  };
+      // Start detection frame loop for this tile
+      const processTileFrame = () => {
+        if (!videoEl || videoEl.paused || videoEl.ended || !instance.isActive) return;
 
-  // Stop stream for a specific tile
-  const stopTileStream = (tileId: string) => {
-    const tile = tiles.find((t) => t.id === tileId);
-    if (tile && tile.stream) {
-      tile.stream.getTracks().forEach((t) => t.stop());
-    }
-
-    const videoEl = videoRefs.current.get(tileId);
-    if (videoEl) {
-      videoEl.srcObject = null;
-    }
-
-    setTiles((prev) =>
-      prev.map((t) =>
-        t.id === tileId
-          ? { ...t, stream: null, isActive: false, isDemoMode: false, detections: [], fps: 0 }
-          : t
-      )
-    );
-  };
-
-  // Enable explicit synthetic demo mode
-  const enableDemoMode = (tileId: string) => {
-    stopTileStream(tileId);
-    setTiles((prev) =>
-      prev.map((t) =>
-        t.id === tileId
-          ? { ...t, isDemoMode: true, isActive: true, error: null }
-          : t
-      )
-    );
-  };
-
-  // Run per-tile detection loops
-  useEffect(() => {
-    tiles.forEach((tile) => {
-      if (tile.isActive && !animFrameIds.current.has(tile.id)) {
-        runTileLoop(tile.id);
-      }
-    });
-
-    return () => {
-      animFrameIds.current.forEach((frameId) => cancelAnimationFrame(frameId));
-    };
-  }, [tiles, config]);
-
-  const runTileLoop = (tileId: string) => {
-    let frameTimes: number[] = [];
-
-    const loop = () => {
-      const video = videoRefs.current.get(tileId);
-      const hiddenCanvas = hiddenCanvasRefs.current.get(tileId);
-      const overlayCanvas = overlayCanvasRefs.current.get(tileId);
-      const tile = tiles.find((t) => t.id === tileId);
-
-      if (hiddenCanvas && overlayCanvas && tile) {
-        const startTime = performance.now();
-        const ctx = hiddenCanvas.getContext("2d", { willReadFrequently: true });
-
-        const w = video?.videoWidth || 640;
-        const h = video?.videoHeight || 480;
-
-        if (hiddenCanvas.width !== w || hiddenCanvas.height !== h) {
-          hiddenCanvas.width = w;
-          hiddenCanvas.height = h;
-        }
-
-        let detections: BallDetection[] = [];
-
-        if (ctx) {
-          // If real camera stream is active and feeding video frames
-          if (video && video.readyState >= 2 && tile.stream && !tile.isDemoMode) {
-            ctx.drawImage(video, 0, 0, w, h);
-            detections = tile.pipeline.processFrame(hiddenCanvas, config);
-          } else if (tile.isDemoMode) {
-            // ONLY run detection if user explicitly triggered Demo Mode
-            drawTileDemoFrame(ctx, w, h, tileId);
-            detections = tile.pipeline.processFrame(hiddenCanvas, config);
-          } else {
-            // Camera not active / no video feeding -> ZERO detections!
-            ctx.fillStyle = "#030712";
-            ctx.fillRect(0, 0, w, h);
-            detections = [];
+        if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+          // Sync canvas dimensions
+          if (canvasEl.width !== videoEl.videoWidth || canvasEl.height !== videoEl.videoHeight) {
+            canvasEl.width = videoEl.videoWidth;
+            canvasEl.height = videoEl.videoHeight;
           }
 
-          // Render overlay bounding boxes onto overlay canvas
-          const overlayCtx = overlayCanvas.getContext("2d");
-          if (overlayCtx) {
-            overlayCanvas.width = w;
-            overlayCanvas.height = h;
-            overlayCtx.clearRect(0, 0, w, h);
-            if (detections.length > 0) {
-              tile.pipeline.drawAnnotations(overlayCtx, detections, config);
-            }
-          }
+          // Run Computer Vision pipeline
+          const result = instance.pipeline.processFrame(videoEl);
 
-          const procMs = Math.max(1, Math.round(performance.now() - startTime));
-          frameTimes.push(procMs);
-          if (frameTimes.length > 20) frameTimes.shift();
+          // Update metrics ref without triggering 60fps React state re-renders
+          tileMetricsRef.current.set(instance.id, {
+            fps: result.fps,
+            latencyMs: result.latencyMs,
+            detectedBalls: result.detectedBalls,
+          });
 
-          const avgMs = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
-          const fps = tile.isActive ? Number((1000 / avgMs).toFixed(1)) : 0;
-
-          // Update tile state
-          setTiles((prev) =>
-            prev.map((t) =>
-              t.id === tileId
-                ? { ...t, detections, fps, latencyMs: procMs }
-                : t
-            )
+          // Draw Overlay on Canvas
+          drawOverlayOnCanvas(
+            canvasEl,
+            result.detectedBalls,
+            result.candidateBlobs,
+            instance.showBoundingBox,
+            instance.showTrails,
+            instance.showCandidates
           );
         }
+
+        const nextFrameId = requestAnimationFrame(processTileFrame);
+        animationFrameIds.current.set(instance.id, nextFrameId);
+      };
+
+      // Start animation loop if not running
+      if (!animationFrameIds.current.has(instance.id)) {
+        const initialFrameId = requestAnimationFrame(processTileFrame);
+        animationFrameIds.current.set(instance.id, initialFrameId);
+      }
+    });
+  }, [cameraInstances]);
+
+  // Draw HUD overlay (Bounding box, velocity vector, specular glint badge, motion trail)
+  const drawOverlayOnCanvas = (
+    canvas: HTMLCanvasElement,
+    balls: DetectedBall[],
+    candidates: any[],
+    showBbox: boolean,
+    showTrails: boolean,
+    showCandidates: boolean
+  ) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Candidate Blobs if enabled
+    if (showCandidates) {
+      candidates.forEach((c) => {
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, c.radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
+
+    balls.forEach((ball) => {
+      // 1. Draw Motion Trails
+      if (showTrails && ball.trajectoryTrail.length > 1) {
+        ctx.beginPath();
+        for (let i = 0; i < ball.trajectoryTrail.length; i++) {
+          const pt = ball.trajectoryTrail[i];
+          if (i === 0) {
+            ctx.moveTo(pt.x, pt.y);
+          } else {
+            ctx.lineTo(pt.x, pt.y);
+          }
+        }
+        ctx.strokeStyle = 'rgba(52, 211, 153, 0.7)';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = '#34d399';
+        ctx.shadowBlur = 6;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
       }
 
-      const frameId = requestAnimationFrame(loop);
-      animFrameIds.current.set(tileId, frameId);
-    };
+      // 2. Draw Bounding Box & Center Target
+      if (showBbox) {
+        const [x1, y1, x2, y2] = ball.bbox;
+        const w = x2 - x1;
+        const h = y2 - y1;
 
-    const frameId = requestAnimationFrame(loop);
-    animFrameIds.current.set(tileId, frameId);
+        // Bounding Box
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, w, h);
+
+        // Corner Crosshairs
+        const cornerLen = Math.min(12, Math.floor(w / 4));
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 3;
+
+        // Top-Left Corner
+        ctx.beginPath();
+        ctx.moveTo(x1, y1 + cornerLen);
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x1 + cornerLen, y1);
+        ctx.stroke();
+
+        // Top-Right Corner
+        ctx.beginPath();
+        ctx.moveTo(x2 - cornerLen, y1);
+        ctx.lineTo(x2, y1);
+        ctx.lineTo(x2, y1 + cornerLen);
+        ctx.stroke();
+
+        // Bottom-Left Corner
+        ctx.beginPath();
+        ctx.moveTo(x1, y2 - cornerLen);
+        ctx.lineTo(x1, y2);
+        ctx.lineTo(x1 + cornerLen, y2);
+        ctx.stroke();
+
+        // Bottom-Right Corner
+        ctx.beginPath();
+        ctx.moveTo(x2 - cornerLen, y2);
+        ctx.lineTo(x2, y2);
+        ctx.lineTo(x2, y2 - cornerLen);
+        ctx.stroke();
+
+        // Center Point
+        ctx.beginPath();
+        ctx.arc(ball.center.x, ball.center.y, 4, 0, 2 * Math.PI);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fill();
+
+        // Velocity Arrow
+        if (ball.velocity.speedPxPerSec > 10) {
+          const arrowLength = Math.min(60, ball.velocity.speedPxPerSec / 10);
+          const angle = Math.atan2(ball.velocity.vy, ball.velocity.vx);
+          const endX = ball.center.x + Math.cos(angle) * arrowLength;
+          const endY = ball.center.y + Math.sin(angle) * arrowLength;
+
+          ctx.beginPath();
+          ctx.moveTo(ball.center.x, ball.center.y);
+          ctx.lineTo(endX, endY);
+          ctx.strokeStyle = '#f59e0b'; // Amber velocity vector
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // HUD Text Header Badge
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(x1, Math.max(0, y1 - 26), Math.max(140, w), 22);
+
+        ctx.font = '11px JetBrains Mono, monospace';
+        ctx.fillStyle = '#34d399';
+        ctx.fillText(
+          `${ball.classLabel} | ${ball.confidence}%`,
+          x1 + 4,
+          Math.max(14, y1 - 10)
+        );
+
+        // Sub-text Telemetry stats
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+        ctx.fillRect(x1, y2 + 2, Math.max(160, w), 18);
+        ctx.fillStyle = '#22d3ee';
+        ctx.font = '10px JetBrains Mono, monospace';
+        ctx.fillText(
+          `V: ${ball.velocity.speedPxPerSec}px/s | G: ${ball.specularGlint} | C: ${ball.circularity}`,
+          x1 + 4,
+          y2 + 14
+        );
+      }
+    });
   };
 
-  const drawTileDemoFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, seed: string) => {
-    ctx.fillStyle = "#030712";
-    ctx.fillRect(0, 0, w, h);
+  // Helper to trigger AI Snapshot for a specific tile
+  const captureTileSnapshot = (instance: ActiveCameraInstance) => {
+    const canvas = canvasRefs.current.get(instance.id);
+    const video = videoRefs.current.get(instance.id);
+    const metrics = tileMetricsRef.current.get(instance.id);
+    const detectedBalls = metrics ? metrics.detectedBalls : [];
 
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
+    if (!canvas || !video) return;
 
-    ctx.beginPath();
-    ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
-    ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    const t = Date.now() * 0.002 + (seed.length * 10);
-    const bx = Math.round(w / 2 + Math.cos(t) * 140);
-    const by = Math.round(h / 2 + Math.sin(t * 1.3) * 80);
-
-    ctx.fillStyle = "#10B981";
-    ctx.beginPath();
-    ctx.arc(bx, by, 20, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-    ctx.beginPath();
-    ctx.arc(bx - 5, by - 5, 5, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  // Add a new camera tile
-  const handleAddCamera = (deviceId: string) => {
-    if (!deviceId) return;
-    const match = availableDevices.find((d) => d.deviceId === deviceId);
-
-    const newTile: CameraTileState = {
-      id: `tile-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      deviceId,
-      label: match ? match.label : `Camera ${tiles.length + 1}`,
-      stream: null,
-      isActive: false,
-      isDemoMode: false,
-      error: null,
-      fps: 0,
-      latencyMs: 0,
-      detections: [],
-      pipeline: new BallDetectorPipeline(),
-    };
-
-    setTiles((prev) => [...prev, newTile]);
-    setSelectedDeviceToAdd("");
-    startTileStream(newTile.id, deviceId);
-  };
-
-  // Remove a camera tile cleanly
-  const handleRemoveTile = (tileId: string) => {
-    if (animFrameIds.current.has(tileId)) {
-      cancelAnimationFrame(animFrameIds.current.get(tileId)!);
-      animFrameIds.current.delete(tileId);
+    // Snapshot image base64
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = video.videoWidth || 640;
+    tempCanvas.height = video.videoHeight || 360;
+    const tempCtx = tempCanvas.getContext('2d');
+    if (tempCtx) {
+      tempCtx.drawImage(video, 0, 0);
+      tempCtx.drawImage(canvas, 0, 0);
+      const base64 = tempCanvas.toDataURL('image/jpeg', 0.85);
+      onTriggerAiSnapshot(base64, detectedBalls, instance.label);
     }
-
-    const tile = tiles.find((t) => t.id === tileId);
-    if (tile && tile.stream) {
-      tile.stream.getTracks().forEach((track) => track.stop());
-    }
-
-    videoRefs.current.delete(tileId);
-    hiddenCanvasRefs.current.delete(tileId);
-    overlayCanvasRefs.current.delete(tileId);
-
-    setTiles((prev) => prev.filter((t) => t.id !== tileId));
   };
 
-  // Trigger Gemini AI analysis for a specific tile
-  const handleTriggerTileAi = (tileId: string) => {
-    const hiddenCanvas = hiddenCanvasRefs.current.get(tileId);
-    const tile = tiles.find((t) => t.id === tileId);
-    if (hiddenCanvas && tile) {
-      const dataUrl = hiddenCanvas.toDataURL("image/jpeg", 0.9);
-      onTriggerAiAnalysis(dataUrl, tile.detections);
-    }
+  // Dynamic Grid Class
+  const getGridClass = () => {
+    const count = cameraInstances.length;
+    if (count <= 1) return 'grid-cols-1';
+    if (count === 2) return 'grid-cols-1 md:grid-cols-2';
+    return 'grid-cols-1 md:grid-cols-2 xl:grid-cols-2';
   };
-
-  // Aggregated metrics
-  const totalActiveBalls = tiles.reduce((acc, t) => acc + t.detections.length, 0);
-  const activeTiles = tiles.filter((t) => t.isActive);
-  const avgFps = activeTiles.length > 0 ? (activeTiles.reduce((acc, t) => acc + t.fps, 0) / activeTiles.length) : 0;
-  const avgLatency = activeTiles.length > 0 ? Math.round(activeTiles.reduce((acc, t) => acc + t.latencyMs, 0) / activeTiles.length) : 0;
-
-  const unusedDevices = availableDevices.filter(
-    (dev) => !tiles.some((t) => t.deviceId === dev.deviceId)
-  );
 
   return (
-    <div className="space-y-6">
-      
-      {/* Top Header & Multi-Camera Controls Bar */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-slate-900/80 border border-slate-800 p-4 rounded-xl">
-        <div>
-          <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
-            <Camera className="w-5 h-5 text-emerald-400" /> Live Multi-Camera Studio
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Run independent real-time YOLOv8 ball detection feeds across connected cameras
-          </p>
+    <div className="space-y-4">
+      {/* Top Action Bar */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/80 p-3 rounded-2xl border border-slate-800">
+        <div className="flex items-center space-x-2 text-slate-300 text-sm font-medium w-full sm:w-auto">
+          <Camera className="w-4 h-4 text-emerald-400" />
+          <span>Active Camera Streams ({cameraInstances.length})</span>
         </div>
 
-        {/* Add Camera Controls */}
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {unusedDevices.length > 0 && (
-            <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 p-1 rounded-xl">
-              <select
-                value={selectedDeviceToAdd}
-                onChange={(e) => setSelectedDeviceToAdd(e.target.value)}
-                className="bg-transparent text-xs text-slate-200 font-mono px-2 py-1 focus:outline-none cursor-pointer"
-              >
-                <option value="" className="bg-slate-900 text-slate-400">
-                  Select Camera to Add...
+        <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
+          {/* Refresh Devices button */}
+          <button
+            onClick={enumerateCameras}
+            disabled={isRefreshingDevices}
+            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-colors border border-slate-700/80"
+            title="Rescan Video Input Devices"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshingDevices ? 'animate-spin' : ''}`} />
+          </button>
+
+          {/* Device Selector */}
+          <select
+            value={selectedDeviceToAdd}
+            onChange={(e) => setSelectedDeviceToAdd(e.target.value)}
+            className="bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-emerald-500 max-w-[220px] truncate"
+          >
+            {availableDevices.length === 0 ? (
+              <option value="">Default Web Camera</option>
+            ) : (
+              availableDevices.map((dev, idx) => (
+                <option key={dev.deviceId || idx} value={dev.deviceId}>
+                  {dev.label || `Camera ${idx + 1}`}
                 </option>
-                {unusedDevices.map((dev) => (
-                  <option key={dev.deviceId} value={dev.deviceId} className="bg-slate-900 text-white">
-                    {dev.label}
-                  </option>
-                ))}
-              </select>
+              ))
+            )}
+          </select>
 
-              <button
-                onClick={() => handleAddCamera(selectedDeviceToAdd)}
-                disabled={!selectedDeviceToAdd}
-                className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-emerald-500/20"
-              >
-                <Plus className="w-4 h-4" /> Add Camera
-              </button>
-            </div>
-          )}
-
-          <div className="text-xs font-mono text-slate-400 bg-slate-950 px-3 py-2 rounded-xl border border-slate-800 flex items-center gap-2">
-            <Layers className="w-4 h-4 text-emerald-400" />
-            <span>Active Streams: <strong className="text-white">{activeTiles.length}</strong> / {tiles.length}</span>
-          </div>
+          {/* Add Camera Button */}
+          <button
+            onClick={() => addCameraTile()}
+            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors shadow-md shadow-emerald-500/20"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Add Stream</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Responsive Grid Viewport & Telemetry Sidebar */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Left 2 Cols: Responsive Multi-Camera Grid */}
-        <div className="lg:col-span-2 space-y-4">
-          
-          {tiles.length === 0 ? (
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
-              <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-emerald-400">
-                <Camera className="w-8 h-8" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">No Camera Feeds Active</h3>
-                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                  Select a video device from the dropdown above and click "Add Camera" to initialize real-time ball detection.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div
-              className={`grid gap-4 ${
-                tiles.length === 1
-                  ? "grid-cols-1"
-                  : "grid-cols-1 md:grid-cols-2"
-              }`}
-            >
-              {tiles.map((tile) => (
-                <div
-                  key={tile.id}
-                  className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col group min-h-[320px]"
-                >
-                  {/* Tile Header Bar */}
-                  <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-10 text-xs font-mono">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${tile.isActive ? "bg-emerald-400 animate-ping" : "bg-slate-600"}`} />
-                      <span className="font-bold text-slate-200 truncate max-w-[140px]" title={tile.label}>
-                        {tile.label}
-                      </span>
-                    </div>
+      {/* Camera Grid Tiles */}
+      {cameraInstances.length === 0 ? (
+        <div className="flex flex-col items-center justify-center p-12 bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400">
+            <VideoOff className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-slate-200 font-semibold text-sm">No Active Camera Tiles</h3>
+            <p className="text-slate-400 text-xs max-w-sm mt-1">
+              Click &quot;Add Stream&quot; above to launch concurrent computer vision pipelines for your attached cameras.
+            </p>
+          </div>
+          <button
+            onClick={() => addCameraTile()}
+            className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-semibold rounded-xl transition-colors"
+          >
+            Mount Default Camera
+          </button>
+        </div>
+      ) : (
+        <div className={`grid ${getGridClass()} gap-4`}>
+          {cameraInstances.map((instance) => {
+            const metrics = tileMetricsMap.get(instance.id) || { fps: 0, latencyMs: 0, detectedBalls: [] };
 
-                    <div className="flex items-center gap-2">
-                      {tile.isActive ? (
-                        <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                          {tile.detections.length} BALLS ({tile.fps.toFixed(0)} FPS)
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500 font-bold bg-slate-800 px-1.5 py-0.5 rounded">
-                          OFFLINE
-                        </span>
-                      )}
-
-                      <button
-                        onClick={() => handleTriggerTileAi(tile.id)}
-                        title="Run Gemini AI on this camera feed"
-                        disabled={!tile.isActive}
-                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 transition disabled:opacity-30"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => handleRemoveTile(tile.id)}
-                        title="Close camera feed"
-                        className="p-1 rounded bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+            return (
+              <div
+                key={instance.id}
+                className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col group shadow-xl"
+              >
+                {/* Tile Header Bar */}
+                <div className="flex items-center justify-between px-3.5 py-2 bg-slate-950/80 border-b border-slate-800 text-xs z-10">
+                  <div className="flex items-center space-x-2 truncate max-w-[60%]">
+                    <div
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        instance.isActive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                      }`}
+                    />
+                    <span className="font-semibold text-slate-200 truncate">{instance.label}</span>
                   </div>
 
-                  {/* Tile Viewfinder Body */}
-                  <div className="relative flex-1 bg-slate-950 flex items-center justify-center overflow-hidden min-h-[240px]">
-                    
-                    {/* Raw video element: opacity 0 so browser continues playing video stream without layout throttling */}
+                  {/* Telemetry Stats Pills & Close */}
+                  <div className="flex items-center space-x-2">
+                    {instance.isActive ? (
+                      <>
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-800 text-emerald-400 border border-slate-700">
+                          {metrics.fps} FPS
+                        </span>
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700 hidden sm:inline-block">
+                          {metrics.latencyMs}ms
+                        </span>
+                        <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                          {metrics.detectedBalls.length} Objects
+                        </span>
+                      </>
+                    ) : (
+                      <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                        Camera Offline
+                      </span>
+                    )}
+
+                  {/* AI Telemetry Button */}
+                  <button
+                    onClick={() => captureTileSnapshot(instance)}
+                    disabled={!instance.isActive}
+                    className="p-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 transition-colors disabled:opacity-40"
+                    title="Send Snapshot to Gemini 2.5 Flash Kinematics Specialist"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Close Tile */}
+                  <button
+                    onClick={() => removeCameraTile(instance.id)}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 transition-colors"
+                    title="Stop & Close Camera"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Video Viewport Stage */}
+              <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+                {instance.error ? (
+                  <div className="p-6 text-center space-y-2">
+                    <AlertCircle className="w-8 h-8 text-rose-400 mx-auto" />
+                    <p className="text-slate-300 text-xs font-mono">{instance.error}</p>
+                    <button
+                      onClick={() => addCameraTile(instance.deviceId)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg font-mono border border-slate-700"
+                    >
+                      Retry Stream Access
+                    </button>
+                  </div>
+                ) : (
+                  <>
                     <video
                       ref={(el) => {
-                        if (el) {
-                          videoRefs.current.set(tile.id, el);
-                          if (tile.stream && el.srcObject !== tile.stream) {
-                            el.srcObject = tile.stream;
-                            el.play().catch(() => {});
-                          }
-                        }
+                        if (el) videoRefs.current.set(instance.id, el);
                       }}
                       autoPlay
                       playsInline
                       muted
-                      className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
+                      className="w-full h-full object-contain"
                     />
-
-                    {/* Hidden Canvas for Image Processing */}
                     <canvas
                       ref={(el) => {
-                        if (el) hiddenCanvasRefs.current.set(tile.id, el);
+                        if (el) canvasRefs.current.set(instance.id, el);
                       }}
-                      className="hidden"
+                      className="absolute inset-0 w-full h-full pointer-events-none object-contain"
                     />
+                  </>
+                )}
 
-                    {/* Interactive Overlay Canvas */}
-                    <canvas
-                      ref={(el) => {
-                        if (el) overlayCanvasRefs.current.set(tile.id, el);
-                      }}
-                      className={`w-full h-auto block object-contain ${!tile.isActive ? "hidden" : ""}`}
-                    />
+                {/* Overlay Toggle Control Pill (Bottom Left of Stage) */}
+                <div className="absolute bottom-3 left-3 z-10 flex items-center space-x-1.5 bg-slate-950/80 backdrop-blur border border-slate-800 p-1 rounded-xl">
+                  <button
+                    onClick={() =>
+                      setCameraInstances((prev) =>
+                        prev.map((i) => (i.id === instance.id ? { ...i, showBoundingBox: !i.showBoundingBox } : i))
+                      )
+                    }
+                    className={`px-2 py-1 rounded-lg text-[10px] font-mono transition-colors ${
+                      instance.showBoundingBox
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Eye className="w-3 h-3 inline mr-1" />
+                    BBox
+                  </button>
 
-                    {/* Camera Off / Error Placeholder (Zero Detections) */}
-                    {!tile.isActive && (
-                      <div className="absolute inset-0 bg-slate-950 p-6 flex flex-col items-center justify-center text-center space-y-3">
-                        {tile.error ? (
-                          <>
-                            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                              <AlertTriangle className="w-6 h-6" />
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-bold text-slate-200">Camera Stream Unavailable</h4>
-                              <p className="text-xs text-slate-400 mt-0.5 max-w-xs">{tile.error}</p>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400">
-                              <Camera className="w-6 h-6" />
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-bold text-slate-200">Camera Stream Stopped</h4>
-                              <p className="text-xs text-slate-400 mt-0.5">Click Start Stream to turn on real-time detection</p>
-                            </div>
-                          </>
-                        )}
+                  <button
+                    onClick={() =>
+                      setCameraInstances((prev) =>
+                        prev.map((i) => (i.id === instance.id ? { ...i, showTrails: !i.showTrails } : i))
+                      )
+                    }
+                    className={`px-2 py-1 rounded-lg text-[10px] font-mono transition-colors ${
+                      instance.showTrails
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Activity className="w-3 h-3 inline mr-1" />
+                    Trails
+                  </button>
 
-                        <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-                          <button
-                            onClick={() => startTileStream(tile.id, tile.deviceId)}
-                            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-1.5"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-current" /> Start Stream
-                          </button>
-
-                          <button
-                            onClick={() => enableDemoMode(tile.id)}
-                            className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 text-cyan-400" /> Synthetic Demo
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Tile Footer Telemetry & Toggle Bar */}
-                  <div className="px-3 py-2 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                    {tile.isActive ? (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => stopTileStream(tile.id)}
-                            className="px-2 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 rounded border border-rose-500/30 font-bold text-[10px] flex items-center gap-1"
-                          >
-                            <Square className="w-3 h-3 fill-current" /> Stop Stream
-                          </button>
-                          <span>Latency: <strong className="text-white">{tile.latencyMs}ms</strong></span>
-                        </div>
-
-                        <span className="truncate max-w-[150px] text-right">
-                          {tile.detections.length > 0
-                            ? tile.detections.map((d) => d.className).join(", ")
-                            : "Searching for balls..."}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-slate-500 italic text-[10px]">
-                        Feed offline • 0 detections
-                      </span>
-                    )}
-                  </div>
-
+                  <button
+                    onClick={() =>
+                      setCameraInstances((prev) =>
+                        prev.map((i) => (i.id === instance.id ? { ...i, showCandidates: !i.showCandidates } : i))
+                      )
+                    }
+                    className={`px-2 py-1 rounded-lg text-[10px] font-mono transition-colors ${
+                      instance.showCandidates
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-3 h-3 inline mr-1" />
+                    Candidates
+                  </button>
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
 
-          {/* Expandable Pipeline Control Drawer */}
-          <PipelineControlsDrawer
-            config={config}
-            onChangeConfig={setConfig}
-            isOpen={isDrawerOpen}
-            onToggleOpen={() => setIsDrawerOpen(!isDrawerOpen)}
-          />
+              {/* Bottom Quick Telemetry Summary Bar */}
+              <div className="px-3 py-2 bg-slate-950 border-t border-slate-800/80 grid grid-cols-3 gap-2 text-[11px] font-mono">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">TARGET HUE</span>
+                  <span className="text-emerald-400 font-semibold uppercase">{pipelineConfig.targetHuePreset}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">CONF THRESHOLD</span>
+                  <span className="text-slate-200">{pipelineConfig.confidenceThreshold}%</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">EMA SMOOTHING</span>
+                  <span className="text-cyan-400">α = {pipelineConfig.emaAlpha}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
         </div>
-
-        {/* Right Col: Aggregated Spatial Telemetry Sidebar */}
-        <div className="space-y-4">
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <span className="font-bold text-xs uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
-                <Activity className="w-4 h-4 text-emerald-400" /> Aggregated Telemetry
-              </span>
-              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                LIVE
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-1">Average FPS</span>
-                <span className="text-emerald-400 text-lg font-extrabold">
-                  {avgFps.toFixed(1)}
-                </span>
-              </div>
-
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-1">Avg Latency</span>
-                <span className="text-cyan-400 text-lg font-extrabold">
-                  {avgLatency} ms
-                </span>
-              </div>
-
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 col-span-2">
-                <span className="text-slate-400 text-[11px] block mb-1">Total Active Detected Balls</span>
-                <span className="text-emerald-400 text-2xl font-extrabold">
-                  {totalActiveBalls}
-                </span>
-              </div>
-            </div>
-
-            {/* Per-Tile Detections List */}
-            <div className="space-y-2">
-              <span className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
-                Tile Detection Status
-              </span>
-
-              {tiles.length === 0 ? (
-                <div className="p-3 bg-slate-950 rounded-lg text-slate-500 text-center text-xs font-mono">
-                  No active camera feeds
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto font-mono text-xs">
-                  {tiles.map((tile) => (
-                    <div
-                      key={`sidebar-${tile.id}`}
-                      className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5"
-                    >
-                      <div className="flex justify-between items-center text-slate-200 font-bold border-b border-slate-900 pb-1">
-                        <span className="truncate max-w-[140px] text-emerald-400">{tile.label}</span>
-                        <span className="text-[10px] text-slate-400">
-                          {tile.isActive ? `${tile.detections.length} targets` : "OFFLINE"}
-                        </span>
-                      </div>
-
-                      {!tile.isActive ? (
-                        <span className="text-[10px] text-slate-500 italic block">Stream stopped</span>
-                      ) : tile.detections.length === 0 ? (
-                        <span className="text-[10px] text-slate-400 italic block">Searching for balls...</span>
-                      ) : (
-                        tile.detections.map((b) => (
-                          <div
-                            key={`b-${tile.id}-${b.id}`}
-                            className="flex justify-between text-[11px] text-slate-300"
-                          >
-                            <span>{b.className} #{b.id}</span>
-                            <span className="text-emerald-400">{(b.confidence * 100).toFixed(1)}%</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-          </div>
-        </div>
-
-      </div>
+      )}
     </div>
   );
 };

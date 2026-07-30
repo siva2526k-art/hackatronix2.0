@@ -1,10 +1,6 @@
 {
-  "name": "Ball & Face Telemetry AI",
-  "description": "Unified 2D Ball & Face Telemetry Tracking System with OpenCV pipeline filtering, spatial analysis, F1/FPS tuning, and Gemini AI analysis.",
-  "requestFramePermissions": [
-    "camera"
-  ],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "name": "BallVision AI",
+  "description": "Real-Time Multi-Camera Ball Detection & Kinematics Telemetry System",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

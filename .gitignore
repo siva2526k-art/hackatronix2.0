@@ -5,3 +5,5 @@ dist
 .DS_Store
 *.log
 remix-real-time-ball-detection-system/
+ballvision-ai/
+ballvision-ai.zip

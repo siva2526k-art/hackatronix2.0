@@ -1,236 +1,274 @@
-import React from "react";
+import React, { useState } from 'react';
 import {
-  BarChart2,
+  BarChart3,
   Download,
-  Gauge,
-  Activity,
-  Award,
-  Zap,
   Sliders,
   CheckCircle2,
-} from "lucide-react";
-import { PipelineConfig } from "../types";
+  XCircle,
+  AlertTriangle,
+  Zap,
+  Clock,
+  Target,
+  FileJson,
+} from 'lucide-react';
+import { CombinedTelemetryEngine } from '../engine/combinedTelemetryEngine';
+import { CameraStreamTileState } from '../types';
 
 interface PerformanceDashboardProps {
-  config: PipelineConfig;
-  setConfig: React.Dispatch<React.SetStateAction<PipelineConfig>>;
+  telemetryEngine: CombinedTelemetryEngine;
+  activeTiles: CameraStreamTileState[];
 }
 
 export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
-  config,
-  setConfig,
+  telemetryEngine,
+  activeTiles,
 }) => {
-  // Calculated F1 Telemetry Stats
-  const precision = Number((0.952 * config.f1Tuning.precisionWeight * 100).toFixed(1));
-  const recall = Number((0.924 * config.f1Tuning.recallWeight * 100).toFixed(1));
-  const f1Score = Number(
-    ((2 * (precision * recall)) / (precision + recall || 1)).toFixed(1)
-  );
+  const [precisionMult, setPrecisionMult] = useState<number>(1.0);
+  const [recallMult, setRecallMult] = useState<number>(1.0);
 
-  const exportTelemetryJson = () => {
-    const data = {
-      system: "BallVision AI Telemetry System",
-      timestamp: new Date().toISOString(),
-      pipelineConfig: config,
-      metrics: {
-        precision: `${precision}%`,
-        recall: `${recall}%`,
-        f1Score: `${f1Score}%`,
-        avgFps: 35.8,
-        latencyMs: 26,
-      },
-    };
+  const benchmark = telemetryEngine.getBenchmarkState();
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
+  const handlePrecisionChange = (val: number) => {
+    setPrecisionMult(val);
+    telemetryEngine.setMultipliers(val, recallMult);
+  };
+
+  const handleRecallChange = (val: number) => {
+    setRecallMult(val);
+    telemetryEngine.setMultipliers(precisionMult, val);
+  };
+
+  const handleExportJson = () => {
+    const jsonStr = telemetryEngine.exportTelemetryJson(activeTiles);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
-    a.download = `telemetry_report_${Date.now()}.json`;
+    a.download = `ballvision_telemetry_${Date.now()}.json`;
     a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Generate SVG path for FPS history
+  const renderLineChart = (data: number[], maxVal: number, colorHex: string) => {
+    if (!data || data.length === 0) return null;
+
+    const width = 300;
+    const height = 60;
+    const step = width / Math.max(1, data.length - 1);
+
+    const points = data.map((val, idx) => {
+      const x = idx * step;
+      const y = height - (val / maxVal) * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    const pathD = `M ${points.join(' L ')}`;
+
+    return (
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+        <path d={pathD} fill="none" stroke={colorHex} strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    );
   };
 
   return (
     <div className="space-y-6">
-      
-      {/* Header & Export Button */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900/80 border border-slate-800 p-6 rounded-2xl">
-        <div>
-          <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
-            <BarChart2 className="w-5 h-5 text-emerald-400" /> Performance & F1/FPS Score Tuning
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Fine-tune precision vs recall weights, non-maximum suppression IoU benchmarks, and monitor real-time inference latency
+      {/* Top Banner Metric Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {/* F1 Score Hero Card */}
+        <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-emerald-500/40 rounded-2xl p-4 shadow-xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-medium text-slate-400 uppercase tracking-wider">
+              Harmonic F1 Score
+            </span>
+            <Target className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="mt-2 flex items-baseline space-x-2">
+            <span className="text-3xl font-mono font-bold text-emerald-400 tracking-tight">
+              {benchmark.f1Score}
+            </span>
+            <span className="text-xs text-emerald-500 font-mono">/ 1.000</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2 font-mono">
+            Harmonic mean of Precision ({benchmark.precision}) and Recall ({benchmark.recall})
           </p>
         </div>
 
-        <button
-          onClick={exportTelemetryJson}
-          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2"
-        >
-          <Download className="w-4 h-4" /> Export Telemetry JSON
-        </button>
+        {/* IoU @ 0.50 */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-medium text-slate-400 uppercase tracking-wider">
+              IoU Accuracy @ 0.50
+            </span>
+            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+          </div>
+          <div className="mt-2 flex items-baseline space-x-2">
+            <span className="text-3xl font-mono font-bold text-cyan-400 tracking-tight">
+              {(benchmark.iou50Accuracy * 100).toFixed(1)}%
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2 font-mono">
+            Overlapping IoU bounding box threshold 50%
+          </p>
+        </div>
+
+        {/* IoU @ 0.75 */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-medium text-slate-400 uppercase tracking-wider">
+              IoU Accuracy @ 0.75
+            </span>
+            <CheckCircle2 className="w-4 h-4 text-amber-400" />
+          </div>
+          <div className="mt-2 flex items-baseline space-x-2">
+            <span className="text-3xl font-mono font-bold text-amber-400 tracking-tight">
+              {(benchmark.iou75Accuracy * 100).toFixed(1)}%
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2 font-mono">
+            Strict IoU bounding box threshold 75%
+          </p>
+        </div>
+
+        {/* Live System Throughput */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-medium text-slate-400 uppercase tracking-wider">
+              Live Stream FPS
+            </span>
+            <Zap className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="mt-2">
+            {renderLineChart(benchmark.fpsHistory, 75, '#34d399')}
+          </div>
+          <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mt-2">
+            <span>Avg: {Math.round(benchmark.fpsHistory.reduce((a, b) => a + b, 0) / Math.max(1, benchmark.fpsHistory.length))} FPS</span>
+            <span className="text-emerald-400">Stable 60FPS</span>
+          </div>
+        </div>
       </div>
 
-      {/* Metric Overview Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        
-        <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl space-y-1">
-          <span className="text-xs font-mono text-slate-400 flex items-center gap-1">
-            <Award className="w-3.5 h-3.5 text-emerald-400" /> F1 Score Benchmark
-          </span>
-          <span className="text-2xl font-black text-emerald-400 font-mono">
-            {f1Score}%
-          </span>
-          <span className="text-[10px] text-slate-500 block">Calculated via Harmonic Mean</span>
-        </div>
-
-        <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl space-y-1">
-          <span className="text-xs font-mono text-slate-400 flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" /> Precision
-          </span>
-          <span className="text-2xl font-black text-cyan-400 font-mono">
-            {precision}%
-          </span>
-          <span className="text-[10px] text-slate-500 block">TP / (TP + FP)</span>
-        </div>
-
-        <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl space-y-1">
-          <span className="text-xs font-mono text-slate-400 flex items-center gap-1">
-            <Activity className="w-3.5 h-3.5 text-amber-400" /> Recall
-          </span>
-          <span className="text-2xl font-black text-amber-400 font-mono">
-            {recall}%
-          </span>
-          <span className="text-[10px] text-slate-500 block">TP / (TP + FN)</span>
-        </div>
-
-        <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-xl space-y-1">
-          <span className="text-xs font-mono text-slate-400 flex items-center gap-1">
-            <Zap className="w-3.5 h-3.5 text-purple-400" /> Average FPS
-          </span>
-          <span className="text-2xl font-black text-purple-400 font-mono">
-            35.8 FPS
-          </span>
-          <span className="text-[10px] text-slate-500 block">26ms Processing Latency</span>
-        </div>
-
-      </div>
-
-      {/* F1 Score Formula & Parameter Tuner */}
+      {/* Main Grid: Multipliers & Confusion Matrix */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
-        {/* F1 Formula Explanation Box */}
-        <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-2xl space-y-4">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-            <Sliders className="w-4 h-4 text-emerald-400" /> Mathematical F1 Score Model
-          </h3>
 
-          <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl font-mono text-center space-y-2">
-            <span className="text-slate-400 text-xs block">Harmonic Mean Formula</span>
-            <div className="text-emerald-400 text-lg font-bold">
-              F1 = 2 × ( (Precision × Recall) / (Precision + Recall) )
+        {/* Multiplier Adjustment Sliders */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5 shadow-xl">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center space-x-2 text-slate-200 font-semibold text-sm">
+              <Sliders className="w-4 h-4 text-emerald-400" />
+              <span>Benchmark Weight Multipliers</span>
             </div>
-            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-              Balances false positives (spurious ball detections) and false negatives (missed fast-moving balls under low light)
-            </p>
+            <span className="text-xs font-mono text-slate-400">Dynamic F1 Tuning</span>
           </div>
 
-          <div className="space-y-3 text-xs">
-            <span className="font-bold text-slate-300 block">Weight Adjustments</span>
+          <p className="text-xs text-slate-400 leading-relaxed font-sans">
+            Adjust precision and recall weighting to simulate specific ground-truth camera placement scenarios, high-speed shutter blur, or occlusion factors.
+          </p>
 
-            {/* Precision Weight Slider */}
-            <div>
-              <div className="flex justify-between font-mono text-slate-300 mb-1">
-                <span>Precision Multiplier Weight</span>
-                <span className="text-cyan-400 font-bold">
-                  {config.f1Tuning.precisionWeight.toFixed(2)}x
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0.5"
-                max="1.8"
-                step="0.05"
-                value={config.f1Tuning.precisionWeight}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    f1Tuning: {
-                      ...config.f1Tuning,
-                      precisionWeight: parseFloat(e.target.value),
-                    },
-                  })
-                }
-                className="w-full accent-cyan-400 cursor-pointer bg-slate-800 rounded"
-              />
+          {/* Precision Slider */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-300">Precision Multiplier</span>
+              <span className="text-cyan-400 font-bold">{precisionMult.toFixed(2)}x</span>
             </div>
+            <input
+              type="range"
+              min="0.50"
+              max="1.80"
+              step="0.05"
+              value={precisionMult}
+              onChange={(e) => handlePrecisionChange(parseFloat(e.target.value))}
+              className="w-full accent-cyan-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>0.50x (Strict)</span>
+              <span>1.00x (Baseline)</span>
+              <span>1.80x (Relaxed)</span>
+            </div>
+          </div>
 
-            {/* Recall Weight Slider */}
-            <div>
-              <div className="flex justify-between font-mono text-slate-300 mb-1">
-                <span>Recall Multiplier Weight</span>
-                <span className="text-amber-400 font-bold">
-                  {config.f1Tuning.recallWeight.toFixed(2)}x
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0.5"
-                max="1.8"
-                step="0.05"
-                value={config.f1Tuning.recallWeight}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    f1Tuning: {
-                      ...config.f1Tuning,
-                      recallWeight: parseFloat(e.target.value),
-                    },
-                  })
-                }
-                className="w-full accent-amber-400 cursor-pointer bg-slate-800 rounded"
-              />
+          {/* Recall Slider */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-300">Recall Multiplier</span>
+              <span className="text-emerald-400 font-bold">{recallMult.toFixed(2)}x</span>
+            </div>
+            <input
+              type="range"
+              min="0.50"
+              max="1.80"
+              step="0.05"
+              value={recallMult}
+              onChange={(e) => handleRecallChange(parseFloat(e.target.value))}
+              className="w-full accent-emerald-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>0.50x (Strict)</span>
+              <span>1.00x (Baseline)</span>
+              <span>1.80x (Relaxed)</span>
+            </div>
+          </div>
+
+          {/* Harmonic Formula Display */}
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] space-y-1">
+            <div className="text-slate-400">FORMULA:</div>
+            <div className="text-emerald-400 font-bold">
+              F1 = 2 × (Precision × Recall) / (Precision + Recall)
+            </div>
+            <div className="text-slate-500 text-[10px]">
+              Current: 2 × ({benchmark.precision} × {benchmark.recall}) / ({benchmark.precision} + {benchmark.recall}) = {benchmark.f1Score}
             </div>
           </div>
         </div>
 
-        {/* NMS IoU Benchmark Curves */}
-        <div className="bg-slate-900/90 border border-slate-800 p-6 rounded-2xl space-y-4">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-            <Gauge className="w-4 h-4 text-cyan-400" /> IoU Benchmark Thresholds
-          </h3>
-
-          <div className="space-y-3 text-xs">
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between font-mono">
-              <span className="text-slate-300">IoU @ 0.50 (Standard)</span>
-              <span className="text-emerald-400 font-bold">96.8% Accuracy</span>
+        {/* Confusion Matrix Breakdown */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5 shadow-xl flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2 text-slate-200 font-semibold text-sm">
+                <BarChart3 className="w-4 h-4 text-cyan-400" />
+                <span>Detection Confusion Matrix</span>
+              </div>
+              <span className="text-xs font-mono text-emerald-400">Real-Time Aggregation</span>
             </div>
 
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between font-mono">
-              <span className="text-slate-300">IoU @ 0.75 (Strict Boundary)</span>
-              <span className="text-cyan-400 font-bold">91.4% Accuracy</span>
-            </div>
+            <div className="grid grid-cols-3 gap-3 mt-4">
+              <div className="p-3 bg-slate-950 border border-emerald-500/30 rounded-xl text-center space-y-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 mx-auto" />
+                <span className="text-[10px] text-slate-400 block font-mono">TRUE POSITIVES</span>
+                <span className="text-2xl font-mono font-bold text-emerald-400">{benchmark.truePositives}</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between font-mono">
-              <span className="text-slate-300">EMA Box Smooth Factor (Alpha)</span>
-              <span className="text-emerald-400 font-bold">
-                {config.f1Tuning.emaSmoothingAlpha.toFixed(2)}
-              </span>
-            </div>
+              <div className="p-3 bg-slate-950 border border-rose-500/30 rounded-xl text-center space-y-1">
+                <XCircle className="w-4 h-4 text-rose-400 mx-auto" />
+                <span className="text-[10px] text-slate-400 block font-mono">FALSE POSITIVES</span>
+                <span className="text-2xl font-mono font-bold text-rose-400">{benchmark.falsePositives}</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between font-mono">
-              <span className="text-slate-300">Specular Glint Filter Status</span>
-              <span className={`font-bold ${config.plausibility.enableSpecularHighlightCheck ? "text-emerald-400" : "text-slate-500"}`}>
-                {config.plausibility.enableSpecularHighlightCheck ? "ENABLED" : "DISABLED"}
-              </span>
+              <div className="p-3 bg-slate-950 border border-amber-500/30 rounded-xl text-center space-y-1">
+                <AlertTriangle className="w-4 h-4 text-amber-400 mx-auto" />
+                <span className="text-[10px] text-slate-400 block font-mono">FALSE NEGATIVES</span>
+                <span className="text-2xl font-mono font-bold text-amber-400">{benchmark.falseNegatives}</span>
+              </div>
             </div>
+          </div>
+
+          {/* Export Telemetry JSON Button */}
+          <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+            <span className="text-xs text-slate-400 font-mono">Download Raw Benchmark Metrics</span>
+            <button
+              onClick={handleExportJson}
+              className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-semibold text-xs rounded-xl transition-all shadow-md shadow-emerald-500/20"
+            >
+              <FileJson className="w-4 h-4" />
+              <span>Export Telemetry JSON</span>
+            </button>
           </div>
         </div>
 
       </div>
-
     </div>
   );
 };

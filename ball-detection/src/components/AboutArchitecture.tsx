@@ -1,96 +1,123 @@
-import React from "react";
-import { Info, Cpu, Layers, ShieldCheck, Palette, Sparkles, CheckCircle } from "lucide-react";
+import React from 'react';
+import {
+  Cpu,
+  Layers,
+  ShieldCheck,
+  Zap,
+  CheckCircle2,
+  Code2,
+  Server,
+  Eye,
+  Sparkles,
+} from 'lucide-react';
 
 export const AboutArchitecture: React.FC = () => {
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       
-      {/* Hero Banner */}
-      <div className="bg-slate-900/90 border border-slate-800 p-8 rounded-2xl space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-500 text-slate-950 flex items-center justify-center font-bold shadow-lg shadow-emerald-500/20">
-            <Cpu className="w-6 h-6" />
+      {/* Hero Header */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-3">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+            <Cpu className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-white">
-              System Architecture & Pipeline Physics
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Multi-Camera 2D Ball Telemetry System built with OpenCV, Canvas Computer Vision, and Gemini AI
+            <h1 className="text-xl font-bold text-slate-100 tracking-tight">
+              BallVision AI — Computer Vision Architecture & Pipeline Topology
+            </h1>
+            <p className="text-xs text-slate-400 font-mono">
+              High-FPS Monocular 2D Ball Tracking & Multi-Camera Telemetry System
             </p>
           </div>
         </div>
-
-        <p className="text-xs text-slate-300 leading-relaxed">
-          BallVision AI is a real-time computer vision platform designed for high-FPS, high-F1 tracking under varying lighting conditions. It integrates a multi-stage filtering architecture to eliminate false positives and bounding box jitter during high-velocity ball movement.
-        </p>
       </div>
 
-      {/* Pipeline Stages Breakdown */}
+      {/* 4 Pipeline Pillars */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        
-        {/* Stage 1 */}
-        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3">
-          <span className="text-xs font-mono font-bold text-emerald-400 flex items-center gap-1.5">
-            <Layers className="w-4 h-4" /> Stage 1: Candidate Generation & Scanning
-          </span>
+
+        {/* Pillar 1: Candidate Generation & Specular Glint */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
+          <div className="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+            <Eye className="w-4 h-4" />
+            <span>1. Candidate Generation & 3D Specular Glint</span>
+          </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Extracts regional color blobs and structural gradient boundaries across the image canvas. Candidate bounding boxes undergo Non-Maximum Suppression (NMS) to eliminate duplicate overlapping boxes.
+            Performs accelerated spatial grid sampling on raw canvas pixel buffers. Converts RGB values to HSV colorspace to calculate target sports ball hue matching scores.
           </p>
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-slate-400 space-y-1">
+            <div className="text-slate-300 font-bold">Mathematical Formulas:</div>
+            <div>• Circularity Ratio: C = 4π × Area / Perimeter²</div>
+            <div>• Specular Highlight: Top-center quadrant luminance contrast delta</div>
+            <div>• Target Hue Match: S_hue = max(0, 1 - |H - H_target| / Tolerance)</div>
+          </div>
         </div>
 
-        {/* Stage 2 */}
-        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3">
-          <span className="text-xs font-mono font-bold text-cyan-400 flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4" /> Stage 2: Geometric & Specular Plausibility
-          </span>
+        {/* Pillar 2: NMS IoU & EMA Smoothing */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
+          <div className="flex items-center space-x-2 text-cyan-400 font-bold text-sm">
+            <Layers className="w-4 h-4" />
+            <span>2. NMS IoU Suppression & EMA Smoothing</span>
+          </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Calculates circularity ratio (4πA/P²), bounding box aspect ratio, and checks for 3D spherical specular highlight glints in the top-center quadrant of candidate balls.
+            Sorts candidate circular blobs by combined plausibility score and applies Non-Maximum Suppression (NMS) to eliminate duplicate bounding boxes based on Intersection over Union (IoU).
           </p>
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-slate-400 space-y-1">
+            <div className="text-slate-300 font-bold">Temporal Smoothing:</div>
+            <div>• IoU = Area(Box_A ∩ Box_B) / Area(Box_A ∪ Box_B)</div>
+            <div>• EMA Position: X_t = α × X_new + (1 - α) × X_prev</div>
+            <div>• Velocity Vector: V = ΔPosition / ΔTime (px/sec)</div>
+          </div>
         </div>
 
-        {/* Stage 3 */}
-        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3">
-          <span className="text-xs font-mono font-bold text-amber-400 flex items-center gap-1.5">
-            <Palette className="w-4 h-4" /> Stage 3: HSV Color Filter & Hue Selector
-          </span>
+        {/* Pillar 3: Zero Face Detection Guarantee */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
+          <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm">
+            <ShieldCheck className="w-4 h-4" />
+            <span>3. Zero Face Detection & Privacy Overhead</span>
+          </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Converts RGB color space to HSL/HSV. Applies user-selected hue targets (e.g., Tennis Lime, Basketball Orange, Cricket Red, Soccer White) with configurable tolerance windows (±Δ hue).
+            The application contains strictly ZERO facial detection, skeletal pose estimation, or biometric tracking dependencies. This ensures lightweight, privacy-preserving, ultra-high-FPS performance on standard client hardware.
           </p>
+          <div className="flex items-center space-x-2 text-[11px] font-mono text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+            <span>100% Client-Side Real-Time Computer Vision Loop</span>
+          </div>
         </div>
 
-        {/* Stage 4 */}
-        <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3">
-          <span className="text-xs font-mono font-bold text-purple-400 flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4" /> Stage 4: Vercel Serverless Gemini Proxy
-          </span>
+        {/* Pillar 4: Vercel Serverless & Gemini 2.5 Flash Proxy */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-lg">
+          <div className="flex items-center space-x-2 text-purple-400 font-bold text-sm">
+            <Server className="w-4 h-4" />
+            <span>4. Vercel Serverless API Proxy Topology</span>
+          </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Calls Gemini 3.6 Flash via serverless function proxy (<code className="text-cyan-400">/api/gemini.ts</code>) to keep GEMINI_API_KEY secure while delivering sports kinematics telemetry analysis.
+            All AI telemetry requests are proxied server-side through <code className="text-emerald-400 font-mono">/api/gemini</code>. Secrets remain strictly hidden on the backend, using <code className="text-cyan-400 font-mono">@google/genai</code> SDK with free-tier model <code className="text-amber-400 font-mono">gemini-2.5-flash</code>.
           </p>
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-slate-400">
+            Endpoint: POST /api/gemini (CORS Headers enabled)
+          </div>
         </div>
 
       </div>
 
-      {/* Key Architectural Highlights */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-3 text-xs">
-        <h3 className="font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-          <CheckCircle className="w-4 h-4 text-emerald-400" /> Key Features
-        </h3>
-
-        <ul className="space-y-2 text-slate-300 font-mono">
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            Exponential Moving Average (EMA) temporal smoothing factor prevents bounding box flicker.
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-            Multi-camera independent stream tracking with per-tile state isolation.
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            100% client-side fallback ensures canvas tracking continues even without network connection.
-          </li>
-        </ul>
+      {/* Deployment Spec Card */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-xl">
+        <div className="flex items-center space-x-2 text-slate-200 font-bold text-sm">
+          <Code2 className="w-4 h-4 text-emerald-400" />
+          <span>Vercel Deployment Compliance (`vercel.json`)</span>
+        </div>
+        <pre className="p-4 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-emerald-400 overflow-x-auto">
+{`{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}`}
+        </pre>
       </div>
 
     </div>

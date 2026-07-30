@@ -1,131 +1,140 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState } from "react";
-import { Navbar } from "./components/Navbar";
-import { LiveCameraStudio } from "./components/LiveCameraStudio";
-import { MediaUploadStudio } from "./components/MediaUploadStudio";
-import { PerformanceDashboard } from "./components/PerformanceDashboard";
-import { AboutArchitecture } from "./components/AboutArchitecture";
-import { AiAnalysisModal } from "./components/AiAnalysisModal";
-import { ActiveTab, BallDetection, DetectionMode, PipelineConfig } from "./types";
+import React, { useState, useRef, useMemo, useCallback } from 'react';
+import { Navbar } from './components/Navbar';
+import { LiveCameraStudio } from './components/LiveCameraStudio';
+import { MediaUploadStudio } from './components/MediaUploadStudio';
+import { PerformanceDashboard } from './components/PerformanceDashboard';
+import { AboutArchitecture } from './components/AboutArchitecture';
+import { PipelineControlsDrawer } from './components/PipelineControlsDrawer';
+import { AiAnalysisModal } from './components/AiAnalysisModal';
+import { CombinedTelemetryEngine } from './engine/combinedTelemetryEngine';
+import {
+  CameraStreamTileState,
+  DEFAULT_PIPELINE_CONFIG,
+  DetectedBall,
+  PipelineConfig,
+} from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("camera");
+  const [activeTab, setActiveTab] = useState<'multicam' | 'media' | 'benchmark' | 'architecture'>('multicam');
+  const [pipelineConfig, setPipelineConfig] = useState<PipelineConfig>(DEFAULT_PIPELINE_CONFIG);
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [isAiModalOpen, setIsAiModalOpen] = useState<boolean>(false);
 
-  // Global Pipeline Configuration State
-  const [config, setConfig] = useState<PipelineConfig>({
-    mode: "ball",
-    f1Tuning: {
-      confidenceThreshold: 0.45,
-      nmsIouThreshold: 0.45,
-      precisionWeight: 1.0,
-      recallWeight: 1.0,
-      emaSmoothingAlpha: 0.35,
-      maxDisappearedFrames: 10,
-    },
-    plausibility: {
-      minCircularityRatio: 0.60,
-      minRadiusPx: 6,
-      maxRadiusPx: 250,
-      enableSpecularHighlightCheck: true,
-      minSpecularThreshold: 0.25,
-    },
-    colorFilter: {
-      enabled: false,
-      preset: "all",
-      targetHue: 55,
-      hueTolerance: 25,
-      minSaturation: 0.2,
-      minLightness: 0.2,
-    },
-    showHUDOverlays: true,
-    showTrajectoryTrails: true,
-    showCrosshairs: true,
-  });
+  // AI Modal Snapshot Data State
+  const [aiSnapshotBase64, setAiSnapshotBase64] = useState<string | undefined>(undefined);
+  const [aiDetectedBalls, setAiDetectedBalls] = useState<DetectedBall[]>([]);
+  const [aiSourceName, setAiSourceName] = useState<string>('Live Camera Viewfinder');
 
-  // AI Modal State
-  const [aiModalOpen, setAiModalOpen] = useState(false);
-  const [capturedFrame, setCapturedFrame] = useState<string | null>(null);
-  const [capturedBalls, setCapturedBalls] = useState<BallDetection[]>([]);
+  // Camera States from LiveCameraStudio
+  const [cameraTileStates, setCameraTileStates] = useState<CameraStreamTileState[]>([]);
 
-  const handleTriggerAiAnalysis = (
-    frameBase64: string,
-    balls: BallDetection[]
+  // Singleton Telemetry Engine
+  const telemetryEngine = useMemo(() => new CombinedTelemetryEngine(), []);
+
+  // Update telemetry metrics whenever live tiles update
+  const handleUpdateCameraStates = useCallback((states: CameraStreamTileState[]) => {
+    setCameraTileStates(states);
+    telemetryEngine.updateLiveTelemetry(states);
+  }, [telemetryEngine]);
+
+  // Trigger AI Modal with frame snapshot
+  const handleTriggerAiSnapshot = (
+    base64Frame: string,
+    detectedBalls: DetectedBall[],
+    sourceName: string
   ) => {
-    setCapturedFrame(frameBase64);
-    setCapturedBalls(balls);
-    setAiModalOpen(true);
+    setAiSnapshotBase64(base64Frame);
+    setAiDetectedBalls(detectedBalls);
+    setAiSourceName(sourceName);
+    setIsAiModalOpen(true);
   };
 
+  // Calculate average FPS across active streams
+  const activeTileList = cameraTileStates.filter((t) => t.isActive);
+  const avgFps =
+    activeTileList.length > 0
+      ? Math.round(
+          activeTileList.reduce((acc, curr) => acc + curr.fps, 0) / activeTileList.length
+        )
+      : 60;
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950">
+    <div className="min-h-screen bg-[#030712] text-slate-300 flex flex-col font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
       
-      {/* Top Navigation */}
+      {/* Navigation Header */}
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        liveFps={35.8}
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        onOpenAiModal={() => setIsAiModalOpen(true)}
+        cameraCount={activeTileList.length}
+        avgFps={avgFps}
       />
 
-      {/* Main App Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8">
-        
-        {activeTab === "camera" && (
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 lg:p-5">
+        {activeTab === 'multicam' && (
           <LiveCameraStudio
-            config={config}
-            setConfig={setConfig}
-            onTriggerAiAnalysis={handleTriggerAiAnalysis}
+            pipelineConfig={pipelineConfig}
+            onTriggerAiSnapshot={handleTriggerAiSnapshot}
+            onUpdateCameraStates={handleUpdateCameraStates}
           />
         )}
 
-        {activeTab === "upload" && (
+        {activeTab === 'media' && (
           <MediaUploadStudio
-            config={config}
-            onTriggerAiAnalysis={handleTriggerAiAnalysis}
+            pipelineConfig={pipelineConfig}
+            onTriggerAiSnapshot={handleTriggerAiSnapshot}
           />
         )}
 
-        {activeTab === "dashboard" && (
+        {activeTab === 'benchmark' && (
           <PerformanceDashboard
-            config={config}
-            setConfig={setConfig}
+            telemetryEngine={telemetryEngine}
+            activeTiles={cameraTileStates}
           />
         )}
 
-        {activeTab === "ai_assistant" && (
-          <div className="p-8 text-center space-y-4 bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl mx-auto my-12">
-            <h2 className="text-xl font-bold text-white">Gemini AI Vision Studio</h2>
-            <p className="text-xs text-slate-400">
-              Trigger instant server-side AI Vision analysis directly from the Live Camera Studio or Media Upload Studio using the "AI Telemetry Analysis" button.
-            </p>
-            <button
-              onClick={() => handleTriggerAiAnalysis("", [])}
-              className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all inline-flex items-center gap-2"
-            >
-              Open Gemini AI Assistant
-            </button>
-          </div>
-        )}
-
-        {activeTab === "about" && <AboutArchitecture />}
-
+        {activeTab === 'architecture' && <AboutArchitecture />}
       </main>
 
-      {/* Serverless Gemini AI Vision Analysis Modal */}
-      <AiAnalysisModal
-        isOpen={aiModalOpen}
-        onClose={() => setAiModalOpen(false)}
-        frameBase64={capturedFrame}
-        balls={capturedBalls}
-        config={config}
+      {/* Slide-over OpenCV Controls Drawer */}
+      <PipelineControlsDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        config={pipelineConfig}
+        onChangeConfig={setPipelineConfig}
       />
 
-      {/* Footer */}
-      <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500 font-mono">
-        <p>BallVision AI Telemetry System • Powered by OpenCV, Vite, React, & Gemini 3.6 Flash</p>
+      {/* Gemini 2.5 Flash Telemetry Specialist Modal */}
+      <AiAnalysisModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        base64Frame={aiSnapshotBase64}
+        detectedBalls={aiDetectedBalls}
+        sourceName={aiSourceName}
+      />
+
+      {/* High Density Footer */}
+      <footer className="h-10 border-t border-slate-800 bg-[#0f172a] flex items-center px-4 justify-between shrink-0 font-mono text-[10px] text-slate-400">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]"></span>
+            <span className="uppercase">ENGINE: SYNCHRONIZED</span>
+          </div>
+          <div className="h-3 w-px bg-slate-800 hidden sm:block"></div>
+          <span className="hidden sm:inline-block text-slate-500 uppercase">BALLVISION AI v2.5-FLASH</span>
+        </div>
+        
+        <div className="flex items-center gap-4">
+          <span className="text-emerald-400 uppercase font-bold">100% CLIENT-SIDE CV</span>
+          <button
+            onClick={() => setIsAiModalOpen(true)}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 rounded text-[10px] font-bold hover:bg-cyan-500/20 uppercase"
+          >
+            GEMINI 2.5 REPORT
+          </button>
+        </div>
       </footer>
 
     </div>

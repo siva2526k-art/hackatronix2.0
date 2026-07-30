@@ -1,180 +1,239 @@
-import React, { useState, useEffect } from "react";
-import { Sparkles, Send, X, AlertCircle, RefreshCw } from "lucide-react";
-import { BallDetection, PipelineConfig } from "../types";
+import React, { useState, useEffect } from 'react';
+import {
+  X,
+  Sparkles,
+  RefreshCw,
+  Copy,
+  Check,
+  AlertCircle,
+  Cpu,
+  Brain,
+  Video,
+} from 'lucide-react';
+import { DetectedBall } from '../types';
 
 interface AiAnalysisModalProps {
   isOpen: boolean;
   onClose: () => void;
-  frameBase64: string | null;
-  balls: BallDetection[];
-  config: PipelineConfig;
+  base64Frame?: string;
+  detectedBalls: DetectedBall[];
+  sourceName: string;
 }
 
 export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
   isOpen,
   onClose,
-  frameBase64,
-  balls,
-  config,
+  base64Frame,
+  detectedBalls,
+  sourceName,
 }) => {
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [analysisText, setAnalysisText] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [analysisText, setAnalysisText] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isCopied, setIsCopied] = useState<boolean>(false);
+  const [userPrompt, setUserPrompt] = useState<string>('');
 
-  const runAnalysis = async () => {
+  const fetchAnalysis = async () => {
     setIsLoading(true);
     setErrorMsg(null);
 
+    const telemetryPayload = {
+      source: sourceName,
+      timestamp: new Date().toISOString(),
+      detectedObjectCount: detectedBalls.length,
+      objects: detectedBalls.map((ball) => ({
+        id: ball.id,
+        classLabel: ball.classLabel,
+        confidencePercent: ball.confidence,
+        bbox: ball.bbox,
+        center: ball.center,
+        radius: ball.radius,
+        circularity: ball.circularity,
+        specularGlint: ball.specularGlint,
+        velocityPxPerSec: ball.velocity.speedPxPerSec,
+        velocityVector: { vx: ball.velocity.vx, vy: ball.velocity.vy },
+      })),
+    };
+
     try {
-      // Primary call to Vercel Serverless Function proxy /api/gemini
-      const res = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const response = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          image: frameBase64,
-          detections: balls,
-          mode: config.mode,
-          promptCustom: customPrompt,
+          imageBase64: base64Frame,
+          telemetry: telemetryPayload,
+          prompt: userPrompt || undefined,
         }),
       });
 
-      if (!res.ok) {
-        // Fallback to Express backend /api/gemini_analysis if dev server
-        const fallbackRes = await fetch("/api/gemini_analysis", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image: frameBase64,
-            detections: balls,
-            mode: config.mode,
-          }),
-        });
+      const data = await response.json();
 
-        if (!fallbackRes.ok) {
-          const errData = await fallbackRes.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to reach Gemini server proxy.");
-        }
-
-        const fallbackData = await fallbackRes.json();
-        setAnalysisText(fallbackData.analysis);
-        setIsLoading(false);
-        return;
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to reach Gemini API Proxy.');
       }
 
-      const data = await res.json();
-      setAnalysisText(data.analysis);
+      setAnalysisText(data.text);
     } catch (err: any) {
-      console.error("Gemini Analysis Error:", err);
-      setErrorMsg(
-        err.message || "Failed to analyze telemetry frame. Please ensure GEMINI_API_KEY is configured."
-      );
+      console.error('Gemini Analysis error:', err);
+      setErrorMsg(err.message || 'Error processing request with Gemini 2.5 Flash.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isOpen && !analysisText && !isLoading) {
-      runAnalysis();
+    if (isOpen && !analysisText) {
+      fetchAnalysis();
     }
   }, [isOpen]);
+
+  const handleCopy = () => {
+    if (!analysisText) return;
+    navigator.clipboard.writeText(analysisText);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+      <div className="w-full max-w-3xl bg-[#0f172a] border border-slate-800 rounded-lg shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
         
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center">
-              <Sparkles className="w-4 h-4" />
+        {/* Modal Header */}
+        <div className="p-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0 font-mono">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-7 h-7 rounded bg-emerald-500 flex items-center justify-center text-slate-950 font-bold">
+              <Sparkles className="w-4 h-4 fill-slate-950" />
             </div>
             <div>
-              <h3 className="font-extrabold text-sm text-white">Gemini 3.6 Flash Telemetry Specialist</h3>
-              <p className="text-[11px] text-slate-400">Server-Side Proxy Vision AI</p>
+              <h2 className="text-slate-100 font-bold text-xs uppercase tracking-wider flex items-center space-x-2">
+                <span>Gemini 2.5 Flash Specialist</span>
+                <span className="px-1.5 py-0.2 text-[9px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded">
+                  v2.5-FLASH
+                </span>
+              </h2>
+              <p className="text-[10px] text-slate-400 font-mono">
+                Source: {sourceName} | {detectedBalls.length} Active Detections
+              </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-900 border border-slate-800"
+            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-4 flex-1 text-xs">
+        {/* Modal Body */}
+        <div className="p-5 overflow-y-auto space-y-5 flex-1 font-sans">
           
-          {/* Frame Preview + Object Tags */}
-          {frameBase64 && (
-            <div className="flex gap-4 items-center bg-slate-950 p-3 rounded-xl border border-slate-800">
-              <img
-                src={frameBase64}
-                alt="Telemetry Frame"
-                className="w-28 h-20 object-cover rounded-lg border border-slate-800"
-              />
-              <div className="space-y-1 font-mono">
-                <span className="text-slate-300 font-bold block">
-                  Captured Frame Metadata
-                </span>
-                <span className="text-emerald-400 block">
-                  Balls: {balls.length > 0 ? balls.map((b) => b.className).join(", ") : "None"}
-                </span>
+          {/* Frame Snapshot Preview & Custom Query Prompt */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-3 bg-slate-950 border border-slate-800 rounded-xl">
+            {base64Frame ? (
+              <div className="relative aspect-video rounded-lg overflow-hidden border border-slate-800 bg-black flex items-center justify-center">
+                <img src={base64Frame} alt="Captured Snapshot" className="w-full h-full object-contain" />
+              </div>
+            ) : (
+              <div className="aspect-video rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 text-xs font-mono">
+                No Snapshot Frame
+              </div>
+            )}
+
+            <div className="md:col-span-2 space-y-2 flex flex-col justify-between">
+              <div>
+                <label className="text-slate-300 font-mono text-[11px] block font-semibold">
+                  Custom AI Kinematics Prompt (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Estimate ball spin, launch angle, or lighting adjustments..."
+                  value={userPrompt}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-xl focus:outline-none focus:border-emerald-500 font-mono"
+                />
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={fetchAnalysis}
+                  disabled={isLoading}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-lg transition-colors shadow-md disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                  <span>{isLoading ? 'Processing...' : 'Run Analysis'}</span>
+                </button>
               </div>
             </div>
-          )}
+          </div>
 
-          {/* Loading Spinner */}
-          {isLoading && (
+          {/* Result Output Area */}
+          {isLoading ? (
             <div className="py-12 text-center space-y-3">
-              <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto" />
-              <p className="text-slate-300 font-bold">Analyzing Ball Kinematics...</p>
-              <p className="text-slate-500 text-[11px]">
-                Computing trajectory vectors and specular glint features
+              <div className="relative w-12 h-12 mx-auto flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full border-2 border-emerald-500/20 border-t-emerald-400 animate-spin" />
+                <Brain className="w-5 h-5 text-emerald-400" />
+              </div>
+              <p className="text-slate-300 text-xs font-mono">
+                Synthesizing camera telemetry and running ball kinematics physics engine with Gemini 2.5 Flash...
               </p>
             </div>
-          )}
-
-          {/* Error Message */}
-          {errorMsg && (
-            <div className="p-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-xl space-y-2">
-              <div className="flex items-center gap-2 font-bold">
-                <AlertCircle className="w-4 h-4" /> Gemini AI Proxy Error
+          ) : errorMsg ? (
+            <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl space-y-2 text-rose-300 text-xs font-mono">
+              <div className="flex items-center space-x-2 font-bold">
+                <AlertCircle className="w-4 h-4 text-rose-400" />
+                <span>Gemini API Request Error</span>
               </div>
-              <p className="text-slate-300">{errorMsg}</p>
+              <p>{errorMsg}</p>
             </div>
-          )}
-
-          {/* Render Analysis Markdown Result */}
-          {analysisText && !isLoading && (
-            <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3 font-sans text-slate-200 leading-relaxed whitespace-pre-line">
-              {analysisText}
+          ) : analysisText ? (
+            <div className="space-y-4">
+              <div className="p-4 bg-slate-950 border border-slate-800/80 rounded-xl space-y-3 text-slate-200 text-xs leading-relaxed font-sans whitespace-pre-wrap max-h-[380px] overflow-y-auto">
+                {analysisText}
+              </div>
             </div>
-          )}
+          ) : null}
 
         </div>
 
-        {/* Custom Question Prompt Input */}
-        <div className="p-4 border-t border-slate-800 bg-slate-950 flex gap-2">
-          <input
-            type="text"
-            placeholder="Ask a specific question (e.g. 'Estimate spin rate and light reflections')..."
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && runAnalysis()}
-            className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-sans"
-          />
-          <button
-            onClick={runAnalysis}
-            disabled={isLoading}
-            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-40"
-          >
-            <Send className="w-3.5 h-3.5" /> Re-Analyze
-          </button>
+        {/* Modal Footer */}
+        <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-2 text-[11px] font-mono text-slate-400">
+            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Serverless Proxy Route: /api/gemini</span>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            {analysisText && (
+              <button
+                onClick={handleCopy}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl font-mono border border-slate-700 transition-colors"
+              >
+                {isCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Insights</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-xl font-semibold transition-colors"
+            >
+              Close
+            </button>
+          </div>
         </div>
 
       </div>

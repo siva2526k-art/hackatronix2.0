@@ -1,248 +1,396 @@
-import React, { useState, useRef } from "react";
-import { Upload, Sparkles } from "lucide-react";
-import { BallDetection, PipelineConfig } from "../types";
-import { combinedTelemetryEngine } from "../engine/combinedTelemetryEngine";
+import React, { useRef, useState, useEffect } from 'react';
+import {
+  Upload,
+  Image as ImageIcon,
+  Film,
+  Play,
+  Pause,
+  Sparkles,
+  Table,
+  CheckCircle2,
+  Info,
+  Sliders,
+} from 'lucide-react';
+import { BallDetectorPipeline } from '../engine/ballDetectorPipeline';
+import { DetectedBall, PipelineConfig } from '../types';
 
 interface MediaUploadStudioProps {
-  config: PipelineConfig;
-  onTriggerAiAnalysis: (frameBase64: string, balls: BallDetection[]) => void;
+  pipelineConfig: PipelineConfig;
+  onTriggerAiSnapshot: (base64Frame: string, detectedBalls: DetectedBall[], mediaName: string) => void;
 }
 
 export const MediaUploadStudio: React.FC<MediaUploadStudioProps> = ({
-  config,
-  onTriggerAiAnalysis,
+  pipelineConfig,
+  onTriggerAiSnapshot,
 }) => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
-  const [mediaType, setMediaType] = useState<"image" | "video" | null>(null);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
+  const [isPlayingVideo, setIsPlayingVideo] = useState<boolean>(false);
+  const [detectedBalls, setDetectedBalls] = useState<DetectedBall[]>([]);
+  const [candidateCount, setCandidateCount] = useState<number>(0);
+  const [processingTimeMs, setProcessingTimeMs] = useState<number>(0);
 
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [detectedBalls, setDetectedBalls] = useState<BallDetection[]>([]);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pipelineRef = useRef<BallDetectorPipeline>(new BallDetectorPipeline('media_studio', pipelineConfig));
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const imageRef = useRef<HTMLImageElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Sync config changes
+  useEffect(() => {
+    pipelineRef.current.updateConfig(pipelineConfig);
+    if (mediaType === 'image' && imageRef.current) {
+      processMediaElement(imageRef.current);
+    }
+  }, [pipelineConfig]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // Handle File Upload Drop / Change
+  const handleFileChange = (file: File) => {
     if (!file) return;
 
-    setSelectedFile(file);
-    const url = URL.createObjectURL(file);
-    setMediaPreviewUrl(url);
+    if (mediaUrl) {
+      URL.revokeObjectURL(mediaUrl);
+    }
 
-    if (file.type.startsWith("video/")) {
-      setMediaType("video");
-      setDetectedBalls([]);
+    const newUrl = URL.createObjectURL(file);
+    setMediaFile(file);
+    setMediaUrl(newUrl);
+
+    if (file.type.startsWith('video/')) {
+      setMediaType('video');
+      setIsPlayingVideo(false);
     } else {
-      setMediaType("image");
-      setTimeout(() => processStaticImage(url), 100);
+      setMediaType('image');
+      setIsPlayingVideo(false);
     }
   };
 
-  const processStaticImage = (url: string) => {
-    setIsProcessing(true);
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = url;
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileChange(e.dataTransfer.files[0]);
+    }
+  };
 
-    img.onload = () => {
-      if (canvasRef.current && overlayCanvasRef.current) {
-        const canvas = canvasRef.current;
-        const overlay = overlayCanvasRef.current;
+  const lastStateUpdateRef = useRef<number>(0);
 
-        canvas.width = img.width;
-        canvas.height = img.height;
-        overlay.width = img.width;
-        overlay.height = img.height;
+  // Run pipeline processing on source element
+  const processMediaElement = (source: HTMLImageElement | HTMLVideoElement, isVideoLoop = false) => {
+    if (!source || !canvasRef.current) return;
 
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, img.width, img.height);
+    const width = source instanceof HTMLImageElement ? source.naturalWidth || source.width : source.videoWidth;
+    const height = source instanceof HTMLImageElement ? source.naturalHeight || source.height : source.videoHeight;
 
-          const { balls } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
-          setDetectedBalls(balls);
-        }
+    if (!width || !height) return;
+
+    canvasRef.current.width = width;
+    canvasRef.current.height = height;
+
+    const start = performance.now();
+    const result = pipelineRef.current.processFrame(source);
+    const latency = Math.round(performance.now() - start);
+
+    drawOverlay(canvasRef.current, result.detectedBalls);
+
+    const now = performance.now();
+    if (!isVideoLoop || now - lastStateUpdateRef.current > 200) {
+      lastStateUpdateRef.current = now;
+      setProcessingTimeMs(latency);
+      setDetectedBalls(result.detectedBalls);
+      setCandidateCount(result.candidateBlobs.length);
+    }
+  };
+
+  // Video Frame Loop
+  useEffect(() => {
+    let animId: number;
+
+    const loop = () => {
+      if (videoRef.current && !videoRef.current.paused && !videoRef.current.ended) {
+        processMediaElement(videoRef.current, true);
+        animId = requestAnimationFrame(loop);
       }
-      setIsProcessing(false);
     };
-  };
 
-  const processVideoFrame = () => {
-    if (videoRef.current && canvasRef.current && overlayCanvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const overlay = overlayCanvasRef.current;
-
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      overlay.width = canvas.width;
-      overlay.height = canvas.height;
-
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const { balls } = combinedTelemetryEngine.processFrame(canvas, overlay, config);
-        setDetectedBalls(balls);
-      }
+    if (isPlayingVideo) {
+      animId = requestAnimationFrame(loop);
     }
+
+    return () => cancelAnimationFrame(animId);
+  }, [isPlayingVideo]);
+
+  const drawOverlay = (canvas: HTMLCanvasElement, balls: DetectedBall[]) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    balls.forEach((ball) => {
+      const [x1, y1, x2, y2] = ball.bbox;
+      const w = x2 - x1;
+      const h = y2 - y1;
+
+      // Motion Trail
+      if (ball.trajectoryTrail.length > 1) {
+        ctx.beginPath();
+        ball.trajectoryTrail.forEach((pt, i) => {
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+
+      // Box
+      ctx.strokeStyle = '#34d399';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(x1, y1, w, h);
+
+      // Center
+      ctx.beginPath();
+      ctx.arc(ball.center.x, ball.center.y, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = '#22d3ee';
+      ctx.fill();
+
+      // Label Header
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.fillRect(x1, Math.max(0, y1 - 24), Math.max(120, w), 22);
+
+      ctx.fillStyle = '#34d399';
+      ctx.font = 'bold 11px JetBrains Mono, monospace';
+      ctx.fillText(`${ball.classLabel} (${ball.confidence}%)`, x1 + 4, Math.max(14, y1 - 8));
+    });
   };
 
-  const handleRunAiAnalysis = () => {
-    if (canvasRef.current) {
-      const frameBase64 = canvasRef.current.toDataURL("image/jpeg", 0.9);
-      onTriggerAiAnalysis(frameBase64, detectedBalls);
+  const handleAiAnalysis = () => {
+    if (!canvasRef.current) return;
+
+    const tempCanvas = document.createElement('canvas');
+    let srcWidth = 640;
+    let srcHeight = 360;
+
+    if (mediaType === 'image' && imageRef.current) {
+      srcWidth = imageRef.current.naturalWidth;
+      srcHeight = imageRef.current.naturalHeight;
+    } else if (mediaType === 'video' && videoRef.current) {
+      srcWidth = videoRef.current.videoWidth;
+      srcHeight = videoRef.current.videoHeight;
+    }
+
+    tempCanvas.width = srcWidth;
+    tempCanvas.height = srcHeight;
+    const ctx = tempCanvas.getContext('2d');
+
+    if (ctx) {
+      if (mediaType === 'image' && imageRef.current) {
+        ctx.drawImage(imageRef.current, 0, 0);
+      } else if (mediaType === 'video' && videoRef.current) {
+        ctx.drawImage(videoRef.current, 0, 0);
+      }
+      ctx.drawImage(canvasRef.current, 0, 0);
+
+      const base64 = tempCanvas.toDataURL('image/jpeg', 0.85);
+      onTriggerAiSnapshot(base64, detectedBalls, mediaFile?.name || 'Uploaded Media');
     }
   };
 
   return (
     <div className="space-y-6">
-      
-      {/* Title & Dropzone Header */}
-      <div className="bg-slate-900/80 border border-slate-800 p-6 rounded-2xl space-y-4">
-        <div>
-          <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
-            <Upload className="w-5 h-5 text-emerald-400" /> Media Upload & Telemetry Inspection
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Upload sports imagery or high-speed video files to run offline frame telemetry and Gemini AI analysis
-          </p>
-        </div>
+      {/* Upload Dropzone */}
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
+        className="relative bg-slate-900/90 border-2 border-dashed border-slate-700/80 hover:border-emerald-500/80 rounded-2xl p-6 text-center transition-all cursor-pointer group"
+      >
+        <input
+          type="file"
+          accept="image/*,video/*"
+          onChange={(e) => e.target.files?.[0] && handleFileChange(e.target.files[0])}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        />
 
-        {/* Upload Drop Area */}
-        <label className="border-2 border-dashed border-slate-700 hover:border-emerald-500/50 bg-slate-950 p-8 rounded-xl flex flex-col items-center justify-center cursor-pointer transition-colors group text-center">
-          <input
-            type="file"
-            accept="image/*,video/*"
-            onChange={handleFileUpload}
-            className="hidden"
-          />
-          <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform mb-3">
+        <div className="flex flex-col items-center justify-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
             <Upload className="w-6 h-6" />
           </div>
-          <span className="text-sm font-bold text-slate-200">
-            Click to upload Image or Video
-          </span>
-          <span className="text-xs text-slate-500 mt-1">
-            Supports PNG, JPG, WebP, MP4, WebM (up to 50MB)
-          </span>
-        </label>
+          <div>
+            <p className="text-slate-200 font-semibold text-sm">
+              {mediaFile ? mediaFile.name : 'Drop Sports Image or Video Here'}
+            </p>
+            <p className="text-slate-400 text-xs mt-1">
+              Supports PNG, JPG, WebP, MP4, WebM (Computer vision executes client-side in real time)
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* Main Preview & Telemetry Table Grid */}
-      {mediaPreviewUrl && (
+      {/* Main Inspection Viewport Stage */}
+      {mediaUrl && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Main Media Preview Box */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center min-h-[360px]">
-              
-              {/* Hidden Canvas Elements */}
-              <canvas ref={canvasRef} className="hidden" />
+          {/* Stage Viewport */}
+          <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col shadow-xl">
+            {/* Viewport Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-950 border-b border-slate-800 text-xs">
+              <div className="flex items-center space-x-2 font-mono text-slate-300">
+                {mediaType === 'image' ? (
+                  <ImageIcon className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Film className="w-4 h-4 text-cyan-400" />
+                )}
+                <span className="font-semibold truncate max-w-[200px]">{mediaFile?.name}</span>
+              </div>
 
-              {/* Video element if video mode */}
-              {mediaType === "video" && (
-                <video
-                  ref={videoRef}
-                  src={mediaPreviewUrl}
-                  onTimeUpdate={processVideoFrame}
-                  controls
-                  className="w-full h-auto max-h-[500px] object-contain block"
-                />
-              )}
+              <div className="flex items-center space-x-3">
+                <span className="font-mono text-[11px] text-slate-400">
+                  Latency: <span className="text-emerald-400 font-bold">{processingTimeMs}ms</span>
+                </span>
+                <span className="font-mono text-[11px] text-slate-400">
+                  Candidates: <span className="text-cyan-400 font-bold">{candidateCount}</span>
+                </span>
 
-              {/* Static Image element if image mode */}
-              {mediaType === "image" && (
+                <button
+                  onClick={handleAiAnalysis}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>AI Telemetry</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Stage Frame */}
+            <div className="relative bg-black flex items-center justify-center min-h-[360px] overflow-hidden">
+              {mediaType === 'image' ? (
                 <img
                   ref={imageRef}
-                  src={mediaPreviewUrl}
-                  alt="Upload preview"
-                  className="w-full h-auto max-h-[500px] object-contain block"
+                  src={mediaUrl}
+                  alt="Inspection Target"
+                  onLoad={(e) => processMediaElement(e.currentTarget)}
+                  className="max-h-[500px] w-auto object-contain"
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  src={mediaUrl}
+                  controls={false}
+                  loop
+                  onLoadedData={(e) => processMediaElement(e.currentTarget)}
+                  onTimeUpdate={(e) => processMediaElement(e.currentTarget)}
+                  className="max-h-[500px] w-auto object-contain"
                 />
               )}
 
-              {/* Overlay Canvas for HUD Bounding Boxes */}
               <canvas
-                ref={overlayCanvasRef}
-                className="absolute inset-0 pointer-events-none w-full h-full object-contain"
+                ref={canvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none object-contain"
               />
+            </div>
 
-              {isProcessing && (
-                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center text-emerald-400 font-mono text-xs gap-2">
-                  <div className="w-4 h-4 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin" />
-                  Running Computer Vision Pipeline...
+            {/* Video Controls Bar */}
+            {mediaType === 'video' && (
+              <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    if (videoRef.current) {
+                      if (isPlayingVideo) {
+                        videoRef.current.pause();
+                        setIsPlayingVideo(false);
+                      } else {
+                        videoRef.current.play();
+                        setIsPlayingVideo(true);
+                      }
+                    }
+                  }}
+                  className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-colors border border-slate-700"
+                >
+                  {isPlayingVideo ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                  <span>{isPlayingVideo ? 'Pause Video' : 'Play & Track'}</span>
+                </button>
+
+                <div className="text-xs text-slate-400 font-mono">
+                  Frame-by-frame real-time candidate processing active
                 </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-mono">
-                {selectedFile?.name} ({(selectedFile?.size || 0) / (1024 * 1024) > 1 ? `${((selectedFile?.size || 0) / (1024 * 1024)).toFixed(1)} MB` : `${Math.round((selectedFile?.size || 0) / 1024)} KB`})
-              </span>
-
-              <button
-                onClick={handleRunAiAnalysis}
-                className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-2"
-              >
-                <Sparkles className="w-4 h-4" /> Run Gemini AI Analysis
-              </button>
-            </div>
+              </div>
+            )}
           </div>
 
-          {/* Right Col: Telemetry Bounding Box Table */}
-          <div className="space-y-4">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-4">
-              <span className="font-bold text-xs uppercase tracking-wider text-slate-200 block border-b border-slate-800 pb-2">
-                Detected Objects Summary
-              </span>
-
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs font-mono">
-                <span className="text-slate-400 text-[10px] block">Balls Found</span>
-                <span className="text-emerald-400 text-base font-bold">
-                  {detectedBalls.length}
+          {/* Coordinate Bounding Box Telemetry Table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4 flex flex-col justify-between shadow-xl">
+            <div>
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center space-x-2 text-slate-200 font-semibold text-sm">
+                  <Table className="w-4 h-4 text-emerald-400" />
+                  <span>Bounding Box Telemetry ({detectedBalls.length})</span>
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  NMS Filtered
                 </span>
               </div>
 
-              {/* Bounding Box Coordinate Table */}
-              <div className="space-y-2">
-                <span className="text-xs font-semibold text-slate-400 block">
-                  Bounding Box Coordinates [x1, y1, x2, y2]
-                </span>
-
-                <div className="space-y-2 max-h-60 overflow-y-auto font-mono text-[11px]">
-                  {detectedBalls.map((b) => (
+              {detectedBalls.length === 0 ? (
+                <div className="p-8 text-center space-y-2">
+                  <Info className="w-6 h-6 text-slate-500 mx-auto" />
+                  <p className="text-slate-400 text-xs font-mono">No ball objects detected at current threshold.</p>
+                  <p className="text-slate-500 text-[11px]">
+                    Try adjusting Hue Tolerance or Confidence Threshold in CV Tuning.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 mt-3 max-h-[420px] overflow-y-auto pr-1">
+                  {detectedBalls.map((ball) => (
                     <div
-                      key={`b-${b.id}`}
-                      className="p-2.5 bg-slate-950 border border-emerald-500/30 rounded-lg space-y-1"
+                      key={ball.id}
+                      className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2 text-xs font-mono"
                     >
-                      <div className="flex justify-between text-emerald-400 font-bold">
-                        <span>{b.className} #{b.id}</span>
-                        <span>{(b.confidence * 100).toFixed(1)}%</span>
+                      <div className="flex items-center justify-between text-slate-200 font-bold border-b border-slate-800/80 pb-1.5">
+                        <span className="text-emerald-400">{ball.classLabel}</span>
+                        <span className="text-cyan-400">{ball.confidence}% Conf</span>
                       </div>
-                      <div className="text-slate-400">
-                        Box: [{b.bbox.join(", ")}]
+
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">BOUNDS [x1, y1, x2, y2]</span>
+                          <span className="text-slate-300">
+                            [{ball.bbox.join(', ')}]
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[10px]">CENTER (X, Y)</span>
+                          <span className="text-slate-300">
+                            ({ball.center.x}, {ball.center.y})
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-slate-500 text-[10px]">
-                        Circularity: {b.circularity} | Glint: {b.specularScore}
+
+                      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800/60 text-[10px]">
+                        <div>
+                          <span className="text-slate-500 block">CIRCULARITY</span>
+                          <span className="text-emerald-400 font-semibold">{ball.circularity}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block">SPECULAR GLINT</span>
+                          <span className="text-cyan-400 font-semibold">{ball.specularGlint}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block">RADIUS</span>
+                          <span className="text-amber-400 font-semibold">{ball.radius}px</span>
+                        </div>
                       </div>
                     </div>
                   ))}
-
-                  {detectedBalls.length === 0 && (
-                    <div className="p-4 bg-slate-950 text-slate-500 text-center rounded-lg">
-                      No ball targets detected on current frame
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
+            </div>
 
+            {/* Quick Summary Pill */}
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-400 flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Zero face detection dependencies enabled. Monocular 2D high-F1 ball CV.</span>
             </div>
           </div>
-
         </div>
       )}
-
     </div>
   );
 };
