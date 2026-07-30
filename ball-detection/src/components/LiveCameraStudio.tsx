@@ -11,12 +11,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   Layers,
+  RotateCcw,
 } from "lucide-react";
 import {
   BallDetection,
-  PerformanceMetrics,
   PipelineConfig,
-  SpatialTelemetry,
 } from "../types";
 import { BallDetectorPipeline } from "../engine/ballDetectorPipeline";
 import { PipelineControlsDrawer } from "./PipelineControlsDrawer";
@@ -38,6 +37,7 @@ interface CameraTileState {
   label: string;
   stream: MediaStream | null;
   isActive: boolean;
+  isDemoMode: boolean; // Explicit toggle for synthetic testing
   error: string | null;
   fps: number;
   latencyMs: number;
@@ -45,7 +45,7 @@ interface CameraTileState {
   pipeline: BallDetectorPipeline; // Independent pipeline instance per tile
 }
 
-const LOCAL_STORAGE_KEY = "ballvision_active_cameras_v2";
+const LOCAL_STORAGE_KEY = "ballvision_active_cameras_v3";
 
 export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
   config,
@@ -67,7 +67,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
   useEffect(() => {
     async function enumerateCameras() {
       try {
-        // Request temporary stream to ensure camera labels are populated
+        // Request temporary stream to trigger permission prompt & populate camera labels
         const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }).catch(() => null);
         const devices = await navigator.mediaDevices.enumerateDevices();
         if (tempStream) tempStream.getTracks().forEach((t) => t.stop());
@@ -97,7 +97,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
           initialDeviceIds = [videoInputs[0].deviceId];
         }
 
-        // Initialize tiles for starting device IDs
+        // Initialize tile state for initial devices
         if (initialDeviceIds.length > 0) {
           const initialTiles: CameraTileState[] = initialDeviceIds.map((devId, idx) => {
             const match = videoInputs.find((v) => v.deviceId === devId);
@@ -107,11 +107,12 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
               label: match ? match.label : `Camera ${idx + 1}`,
               stream: null,
               isActive: false,
+              isDemoMode: false,
               error: null,
               fps: 0,
               latencyMs: 0,
               detections: [],
-              pipeline: new BallDetectorPipeline(), // Isolated pipeline instance per tile
+              pipeline: new BallDetectorPipeline(),
             };
           });
           setTiles(initialTiles);
@@ -132,15 +133,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
     }
   }, [tiles]);
 
-  // 2. Manage streams and detection loops per tile
-  useEffect(() => {
-    tiles.forEach((tile) => {
-      if (!tile.isActive && !tile.error && !tile.stream) {
-        startTileStream(tile.id, tile.deviceId);
-      }
-    });
-  }, [tiles]);
-
+  // Start real webcam stream for a specific tile
   const startTileStream = async (tileId: string, deviceId: string) => {
     try {
       const constraints: MediaStreamConstraints = {
@@ -152,21 +145,69 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      setTiles((prev) =>
-        prev.map((t) =>
-          t.id === tileId ? { ...t, stream, isActive: true, error: null } : t
-        )
-      );
-    } catch (err: any) {
-      console.warn(`Failed to start camera tile ${tileId}:`, err);
+      // Attach stream to video element
+      const videoEl = videoRefs.current.get(tileId);
+      if (videoEl) {
+        videoEl.srcObject = stream;
+        videoEl.play().catch(() => {});
+      }
+
       setTiles((prev) =>
         prev.map((t) =>
           t.id === tileId
-            ? { ...t, error: "Camera stream unavailable or already in use.", isActive: true }
+            ? { ...t, stream, isActive: true, isDemoMode: false, error: null, detections: [] }
+            : t
+        )
+      );
+    } catch (err: any) {
+      console.warn(`Failed to start camera stream for ${tileId}:`, err);
+      setTiles((prev) =>
+        prev.map((t) =>
+          t.id === tileId
+            ? {
+                ...t,
+                error: "Camera access denied or device in use.",
+                isActive: false,
+                isDemoMode: false,
+                detections: [],
+              }
             : t
         )
       );
     }
+  };
+
+  // Stop stream for a specific tile
+  const stopTileStream = (tileId: string) => {
+    const tile = tiles.find((t) => t.id === tileId);
+    if (tile && tile.stream) {
+      tile.stream.getTracks().forEach((t) => t.stop());
+    }
+
+    const videoEl = videoRefs.current.get(tileId);
+    if (videoEl) {
+      videoEl.srcObject = null;
+    }
+
+    setTiles((prev) =>
+      prev.map((t) =>
+        t.id === tileId
+          ? { ...t, stream: null, isActive: false, isDemoMode: false, detections: [], fps: 0 }
+          : t
+      )
+    );
+  };
+
+  // Enable explicit synthetic demo mode
+  const enableDemoMode = (tileId: string) => {
+    stopTileStream(tileId);
+    setTiles((prev) =>
+      prev.map((t) =>
+        t.id === tileId
+          ? { ...t, isDemoMode: true, isActive: true, error: null }
+          : t
+      )
+    );
   };
 
   // Run per-tile detection loops
@@ -203,24 +244,33 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
           hiddenCanvas.height = h;
         }
 
+        let detections: BallDetection[] = [];
+
         if (ctx) {
-          if (video && video.readyState >= 2) {
+          // If real camera stream is active and feeding video frames
+          if (video && video.readyState >= 2 && tile.stream && !tile.isDemoMode) {
             ctx.drawImage(video, 0, 0, w, h);
-          } else {
-            // Demo fallback animation if video stream is unattached or paused
+            detections = tile.pipeline.processFrame(hiddenCanvas, config);
+          } else if (tile.isDemoMode) {
+            // ONLY run detection if user explicitly triggered Demo Mode
             drawTileDemoFrame(ctx, w, h, tileId);
+            detections = tile.pipeline.processFrame(hiddenCanvas, config);
+          } else {
+            // Camera not active / no video feeding -> ZERO detections!
+            ctx.fillStyle = "#030712";
+            ctx.fillRect(0, 0, w, h);
+            detections = [];
           }
 
-          // Execute THIS tile's isolated pipeline instance
-          const detections = tile.pipeline.processFrame(hiddenCanvas, config);
-
-          // Render overlay bounding boxes onto THIS tile's overlay canvas
+          // Render overlay bounding boxes onto overlay canvas
           const overlayCtx = overlayCanvas.getContext("2d");
           if (overlayCtx) {
             overlayCanvas.width = w;
             overlayCanvas.height = h;
             overlayCtx.clearRect(0, 0, w, h);
-            tile.pipeline.drawAnnotations(overlayCtx, detections, config);
+            if (detections.length > 0) {
+              tile.pipeline.drawAnnotations(overlayCtx, detections, config);
+            }
           }
 
           const procMs = Math.max(1, Math.round(performance.now() - startTime));
@@ -228,9 +278,9 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
           if (frameTimes.length > 20) frameTimes.shift();
 
           const avgMs = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
-          const fps = Number((1000 / avgMs).toFixed(1));
+          const fps = tile.isActive ? Number((1000 / avgMs).toFixed(1)) : 0;
 
-          // Update state for this tile
+          // Update tile state
           setTiles((prev) =>
             prev.map((t) =>
               t.id === tileId
@@ -253,7 +303,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
     ctx.fillStyle = "#030712";
     ctx.fillRect(0, 0, w, h);
 
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
 
@@ -289,37 +339,35 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
       label: match ? match.label : `Camera ${tiles.length + 1}`,
       stream: null,
       isActive: false,
+      isDemoMode: false,
       error: null,
       fps: 0,
       latencyMs: 0,
       detections: [],
-      pipeline: new BallDetectorPipeline(), // Independent pipeline instance
+      pipeline: new BallDetectorPipeline(),
     };
 
     setTiles((prev) => [...prev, newTile]);
     setSelectedDeviceToAdd("");
+    startTileStream(newTile.id, deviceId);
   };
 
   // Remove a camera tile cleanly
   const handleRemoveTile = (tileId: string) => {
-    // 1. Cancel animation loop
     if (animFrameIds.current.has(tileId)) {
       cancelAnimationFrame(animFrameIds.current.get(tileId)!);
       animFrameIds.current.delete(tileId);
     }
 
-    // 2. Stop media stream tracks
     const tile = tiles.find((t) => t.id === tileId);
     if (tile && tile.stream) {
       tile.stream.getTracks().forEach((track) => track.stop());
     }
 
-    // 3. Remove DOM element refs
     videoRefs.current.delete(tileId);
     hiddenCanvasRefs.current.delete(tileId);
     overlayCanvasRefs.current.delete(tileId);
 
-    // 4. Update tile state
     setTiles((prev) => prev.filter((t) => t.id !== tileId));
   };
 
@@ -333,12 +381,12 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
     }
   };
 
-  // Calculate aggregated metrics across all active tiles
+  // Aggregated metrics
   const totalActiveBalls = tiles.reduce((acc, t) => acc + t.detections.length, 0);
-  const avgFps = tiles.length > 0 ? (tiles.reduce((acc, t) => acc + t.fps, 0) / tiles.length) : 0;
-  const avgLatency = tiles.length > 0 ? Math.round(tiles.reduce((acc, t) => acc + t.latencyMs, 0) / tiles.length) : 0;
+  const activeTiles = tiles.filter((t) => t.isActive);
+  const avgFps = activeTiles.length > 0 ? (activeTiles.reduce((acc, t) => acc + t.fps, 0) / activeTiles.length) : 0;
+  const avgLatency = activeTiles.length > 0 ? Math.round(activeTiles.reduce((acc, t) => acc + t.latencyMs, 0) / activeTiles.length) : 0;
 
-  // Unused available camera options for "Add Camera" dropdown
   const unusedDevices = availableDevices.filter(
     (dev) => !tiles.some((t) => t.deviceId === dev.deviceId)
   );
@@ -353,7 +401,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
             <Camera className="w-5 h-5 text-emerald-400" /> Live Multi-Camera Studio
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Run independent YOLOv8 ball detection loops simultaneously across multiple camera feeds
+            Run independent real-time YOLOv8 ball detection feeds across connected cameras
           </p>
         </div>
 
@@ -388,7 +436,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
 
           <div className="text-xs font-mono text-slate-400 bg-slate-950 px-3 py-2 rounded-xl border border-slate-800 flex items-center gap-2">
             <Layers className="w-4 h-4 text-emerald-400" />
-            <span>Active Feeds: <strong className="text-white">{tiles.length}</strong></span>
+            <span>Active Streams: <strong className="text-white">{activeTiles.length}</strong> / {tiles.length}</span>
           </div>
         </div>
       </div>
@@ -405,9 +453,9 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                 <Camera className="w-8 h-8" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">No Active Camera Feeds</h3>
+                <h3 className="text-base font-bold text-white">No Camera Feeds Active</h3>
                 <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                  Select a connected video device from the dropdown above and click "Add Camera" to start multi-stream ball telemetry.
+                  Select a video device from the dropdown above and click "Add Camera" to initialize real-time ball detection.
                 </p>
               </div>
             </div>
@@ -422,29 +470,33 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
               {tiles.map((tile) => (
                 <div
                   key={tile.id}
-                  className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col group min-h-[300px]"
+                  className="relative bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col group min-h-[320px]"
                 >
                   {/* Tile Header Bar */}
                   <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-10 text-xs font-mono">
                     <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className={`w-2.5 h-2.5 rounded-full ${tile.isActive ? "bg-emerald-400 animate-ping" : "bg-slate-600"}`} />
                       <span className="font-bold text-slate-200 truncate max-w-[140px]" title={tile.label}>
                         {tile.label}
                       </span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                        {tile.detections.length} BALLS
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        {tile.fps.toFixed(0)} FPS
-                      </span>
+                      {tile.isActive ? (
+                        <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                          {tile.detections.length} BALLS ({tile.fps.toFixed(0)} FPS)
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 font-bold bg-slate-800 px-1.5 py-0.5 rounded">
+                          OFFLINE
+                        </span>
+                      )}
 
                       <button
                         onClick={() => handleTriggerTileAi(tile.id)}
                         title="Run Gemini AI on this camera feed"
-                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 transition"
+                        disabled={!tile.isActive}
+                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 transition disabled:opacity-30"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
                       </button>
@@ -460,7 +512,9 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                   </div>
 
                   {/* Tile Viewfinder Body */}
-                  <div className="relative flex-1 bg-slate-950 flex items-center justify-center overflow-hidden">
+                  <div className="relative flex-1 bg-slate-950 flex items-center justify-center overflow-hidden min-h-[240px]">
+                    
+                    {/* Raw video element: opacity 0 so browser continues playing video stream without layout throttling */}
                     <video
                       ref={(el) => {
                         if (el) {
@@ -474,10 +528,10 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                       autoPlay
                       playsInline
                       muted
-                      className="hidden"
+                      className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
                     />
 
-                    {/* Hidden Canvas */}
+                    {/* Hidden Canvas for Image Processing */}
                     <canvas
                       ref={(el) => {
                         if (el) hiddenCanvasRefs.current.set(tile.id, el);
@@ -490,25 +544,78 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                       ref={(el) => {
                         if (el) overlayCanvasRefs.current.set(tile.id, el);
                       }}
-                      className="w-full h-auto block object-contain"
+                      className={`w-full h-auto block object-contain ${!tile.isActive ? "hidden" : ""}`}
                     />
 
-                    {tile.error && (
-                      <div className="absolute inset-0 bg-slate-950/90 p-4 flex flex-col items-center justify-center text-center gap-2 text-amber-400 text-xs font-mono">
-                        <AlertTriangle className="w-6 h-6 text-amber-400" />
-                        <span>{tile.error}</span>
+                    {/* Camera Off / Error Placeholder (Zero Detections) */}
+                    {!tile.isActive && (
+                      <div className="absolute inset-0 bg-slate-950 p-6 flex flex-col items-center justify-center text-center space-y-3">
+                        {tile.error ? (
+                          <>
+                            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                              <AlertTriangle className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-200">Camera Stream Unavailable</h4>
+                              <p className="text-xs text-slate-400 mt-0.5 max-w-xs">{tile.error}</p>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400">
+                              <Camera className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-200">Camera Stream Stopped</h4>
+                              <p className="text-xs text-slate-400 mt-0.5">Click Start Stream to turn on real-time detection</p>
+                            </div>
+                          </>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                          <button
+                            onClick={() => startTileStream(tile.id, tile.deviceId)}
+                            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-1.5"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" /> Start Stream
+                          </button>
+
+                          <button
+                            onClick={() => enableDemoMode(tile.id)}
+                            className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 text-cyan-400" /> Synthetic Demo
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
 
-                  {/* Tile Footer Telemetry Strip */}
-                  <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-900 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                    <span>Latency: <strong className="text-white">{tile.latencyMs}ms</strong></span>
-                    <span className="truncate max-w-[160px]">
-                      {tile.detections.length > 0
-                        ? tile.detections.map((d) => d.className).join(", ")
-                        : "No targets"}
-                    </span>
+                  {/* Tile Footer Telemetry & Toggle Bar */}
+                  <div className="px-3 py-2 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                    {tile.isActive ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => stopTileStream(tile.id)}
+                            className="px-2 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 rounded border border-rose-500/30 font-bold text-[10px] flex items-center gap-1"
+                          >
+                            <Square className="w-3 h-3 fill-current" /> Stop Stream
+                          </button>
+                          <span>Latency: <strong className="text-white">{tile.latencyMs}ms</strong></span>
+                        </div>
+
+                        <span className="truncate max-w-[150px] text-right">
+                          {tile.detections.length > 0
+                            ? tile.detections.map((d) => d.className).join(", ")
+                            : "Searching for balls..."}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-slate-500 italic text-[10px]">
+                        Feed offline • 0 detections
+                      </span>
+                    )}
                   </div>
 
                 </div>
@@ -533,7 +640,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                 <Activity className="w-4 h-4 text-emerald-400" /> Aggregated Telemetry
               </span>
               <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                MULTI-STREAM
+                LIVE
               </span>
             </div>
 
@@ -563,7 +670,7 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
             {/* Per-Tile Detections List */}
             <div className="space-y-2">
               <span className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
-                Tile Detection Feeds
+                Tile Detection Status
               </span>
 
               {tiles.length === 0 ? (
@@ -579,11 +686,15 @@ export const LiveCameraStudio: React.FC<LiveCameraStudioProps> = ({
                     >
                       <div className="flex justify-between items-center text-slate-200 font-bold border-b border-slate-900 pb-1">
                         <span className="truncate max-w-[140px] text-emerald-400">{tile.label}</span>
-                        <span className="text-[10px] text-slate-400">{tile.detections.length} targets</span>
+                        <span className="text-[10px] text-slate-400">
+                          {tile.isActive ? `${tile.detections.length} targets` : "OFFLINE"}
+                        </span>
                       </div>
 
-                      {tile.detections.length === 0 ? (
-                        <span className="text-[10px] text-slate-500 italic block">No ball targets</span>
+                      {!tile.isActive ? (
+                        <span className="text-[10px] text-slate-500 italic block">Stream stopped</span>
+                      ) : tile.detections.length === 0 ? (
+                        <span className="text-[10px] text-slate-400 italic block">Searching for balls...</span>
                       ) : (
                         tile.detections.map((b) => (
                           <div
