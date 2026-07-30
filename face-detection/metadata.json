@@ -1,0 +1,10 @@
+{
+  "name": "Monocular Face Distance Telemetry",
+  "description": "Real-time monocular face distance (Z) and angle (theta) estimation telemetry using MediaPipe FaceLandmarker and Gemini AI analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
